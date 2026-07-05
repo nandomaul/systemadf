@@ -1,8 +1,9 @@
 {
-  "name": "nddomaul",
+  "name": "systemadf",
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "homepage": "https://systemadf.site",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -15,6 +16,7 @@
     "@emailjs/browser": "^4.4.1",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.5.0",
+    "@supabase/supabase-js": "^2.110.0",
     "@tailwindcss/vite": "^4.1.18",
     "autoprefixer": "^10.4.23",
     "lucide-react": "^0.562.0",
