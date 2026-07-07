@@ -2692,7 +2692,7 @@ function RequestDesignPanel({
   onEditRequest,
 }) {
   return (
-    <section className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_390px]">
+    <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_390px]">
       <div>
         <div className="mb-4 flex items-end justify-between">
           <div>

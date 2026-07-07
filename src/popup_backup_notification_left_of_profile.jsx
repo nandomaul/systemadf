@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
   Rocket,
   FileText,
@@ -89,13 +89,14 @@ function PopupProfileMenu({ auth, isDark }) {
 
   return (
     <>
-      <RequestNotificationBell
-        className="fixed left-8 top-8 z-[1006]"
-        buttonClassName="relative grid h-12 w-12 place-items-center rounded-full border border-white/70 bg-white/90 text-neutral-700 shadow-[0_18px_55px_rgba(0,0,0,0.12)] backdrop-blur-xl transition hover:text-neutral-950 active:scale-95"
-        panelClassName="adf-notif-card absolute left-0 top-full mt-3 w-[360px] overflow-hidden rounded-[28px] border border-white/70 bg-white/95 p-3 shadow-[0_35px_120px_rgba(0,0,0,0.22)] backdrop-blur-xl"
-      />
 
-      <button
+      <RequestNotificationBell
+              className="popup-inline-notification-bell relative z-20"
+              buttonClassName="relative grid h-12 w-12 place-items-center rounded-full bg-neutral-100/90 text-neutral-700 transition hover:bg-neutral-200 hover:text-neutral-950 active:scale-95"
+              panelClassName="adf-notif-card absolute right-0 top-full mt-3 w-[360px] overflow-hidden rounded-[28px] border border-white/70 bg-white/95 p-3 shadow-[0_35px_120px_rgba(0,0,0,0.22)] backdrop-blur-xl"
+            />
+
+            <button
         type="button"
         onClick={() => setSettingsOpen(true)}
         className={`adf-popup-profile fixed right-8 top-8 z-[1005] flex h-[64px] w-[230px] items-center gap-3 rounded-[26px] border px-3 py-2 text-left shadow-[0_18px_55px_rgba(0,0,0,0.1)] backdrop-blur-xl transition active:scale-[0.985] ${
@@ -153,14 +154,6 @@ function PopupProfileMenu({ auth, isDark }) {
 
 export default function Popup({ auth }) {
   const isDark = auth?.themeMode === "dark";
-
-  useEffect(() => {
-    const cleanPath = window.location.pathname.replace(/\/+$/, "");
-
-    if (cleanPath === "/popup") {
-      window.history.replaceState({}, "", "/");
-    }
-  }, []);
 
   return (
     <div

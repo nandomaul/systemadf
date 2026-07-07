@@ -906,7 +906,7 @@ function Sidebar({ activeMenu, setActiveMenu, onBack }) {
         </p>
 
         <p className="mt-2 text-xs leading-5 text-neutral-500">
-          Always check price, placement, platform, and latest campaign details
+          Always check price & material latest campaign details
           before sharing materials.
         </p>
       </div>

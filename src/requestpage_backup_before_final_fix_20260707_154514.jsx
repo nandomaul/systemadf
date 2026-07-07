@@ -590,6 +590,31 @@ async function createRequestNotification(request, data = {}) {
   return { error: null };
 }
 
+
+function getRequestIsDarkMode() {
+  if (typeof window === "undefined" || typeof document === "undefined") return false;
+
+  try {
+    const root = document.documentElement;
+    const body = document.body;
+    const savedTheme =
+      window.localStorage.getItem("adf_theme_mode") ||
+      window.localStorage.getItem("adf-theme-mode") ||
+      window.localStorage.getItem("theme") ||
+      window.localStorage.getItem("themeMode");
+
+    return (
+      savedTheme === "dark" ||
+      root.classList.contains("dark") ||
+      body.classList.contains("dark") ||
+      root.dataset.theme === "dark" ||
+      body.dataset.theme === "dark"
+    );
+  } catch {
+    return false;
+  }
+}
+
 function goHomepage() {
   if (window.ADFNavigate) {
     window.ADFNavigate("/popup");
@@ -600,6 +625,7 @@ function goHomepage() {
 }
 
 export default function RequestPage() {
+  const [isDarkMode, setIsDarkMode] = useState(getRequestIsDarkMode);
   const [activeMenu, setActiveMenu] = useState(getInitialRequestMenu);
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [sortBy, setSortBy] = useState("date");
@@ -660,6 +686,35 @@ export default function RequestPage() {
     drive_link: "",
     note: "",
   });
+
+  useEffect(() => {
+    const syncDarkMode = () => setIsDarkMode(getRequestIsDarkMode());
+    syncDarkMode();
+
+    if (typeof MutationObserver === "undefined" || typeof document === "undefined") {
+      return () => {};
+    }
+
+    const observer = new MutationObserver(syncDarkMode);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class", "data-theme"],
+    });
+
+    if (document.body) {
+      observer.observe(document.body, {
+        attributes: true,
+        attributeFilter: ["class", "data-theme"],
+      });
+    }
+
+    window.addEventListener("storage", syncDarkMode);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("storage", syncDarkMode);
+    };
+  }, []);
 
   useEffect(() => {
     loadRequests();
@@ -1784,6 +1839,25 @@ export default function RequestPage() {
           opacity: .8;
           cursor: pointer;
         }
+
+
+        .dark .request-category-card[data-active="true"],
+        html.dark .request-category-card[data-active="true"],
+        body.dark .request-category-card[data-active="true"],
+        [data-theme="dark"] .request-category-card[data-active="true"] {
+          background: #ffffff !important;
+          color: #111111 !important;
+          border-color: rgba(255,255,255,.35) !important;
+        }
+
+        .dark .request-category-card:not([data-active="true"]),
+        html.dark .request-category-card:not([data-active="true"]),
+        body.dark .request-category-card:not([data-active="true"]),
+        [data-theme="dark"] .request-category-card:not([data-active="true"]) {
+          background: rgba(255,255,255,.06) !important;
+          color: #ffffff !important;
+          border-color: rgba(255,255,255,.10) !important;
+        }
       `}</style>
 
       <div className="pointer-events-none fixed inset-0">
@@ -1820,6 +1894,7 @@ export default function RequestPage() {
             <div className="min-w-[1180px]">
               {activeMenu === "request" && (
                 <RequestDesignPanel
+                  isDarkMode={isDarkMode}
                   loading={loading}
                   saving={saving}
                   categoryStats={categoryStats}
@@ -2670,6 +2745,7 @@ function HeroSlideBoard({ search, setSearch }) {
 }
 
 function RequestDesignPanel({
+  isDarkMode = false,
   loading,
   saving,
   categoryStats,
@@ -2706,7 +2782,11 @@ function RequestDesignPanel({
 
           <button
             onClick={onRefresh}
-            className="rounded-full bg-white/80 px-4 py-2 text-xs font-medium text-neutral-500 shadow-sm transition hover:text-neutral-950"
+            className={`rounded-full px-4 py-2 text-xs font-medium shadow-sm transition ${
+              isDarkMode
+                ? "bg-white/10 text-white/65 hover:bg-white/15 hover:text-white"
+                : "bg-white/80 text-neutral-500 hover:text-neutral-950"
+            }`}
           >
             Refresh
           </button>
@@ -2720,11 +2800,16 @@ function RequestDesignPanel({
               index={index}
               active={selectedCategory === category.id}
               onClick={() => setSelectedCategory(category.id)}
+              isDark={isDarkMode}
             />
           ))}
         </div>
 
-        <div className="mt-5 rounded-[28px] border border-white/70 bg-white/62 p-4 shadow-[0_18px_60px_rgba(0,0,0,0.06)] backdrop-blur-xl md:p-5">
+        <div
+          className={`mt-5 rounded-[28px] border p-4 shadow-[0_18px_60px_rgba(0,0,0,0.06)] backdrop-blur-xl md:p-5 ${
+            isDarkMode ? "border-white/10 bg-white/[0.055]" : "border-white/70 bg-white/62"
+          }`}
+        >
           <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
               <p className="text-xs font-medium uppercase tracking-[0.2em] text-neutral-400">
@@ -2734,7 +2819,11 @@ function RequestDesignPanel({
                 {filteredRequests.length} requests
               </h3>
             </div>
-            <p className="rounded-full bg-white/80 px-4 py-2 text-xs font-medium text-neutral-400 shadow-sm">
+            <p
+              className={`rounded-full px-4 py-2 text-xs font-medium shadow-sm ${
+                isDarkMode ? "bg-white/8 text-white/45" : "bg-white/80 text-neutral-400"
+              }`}
+            >
               Latest update first
             </p>
           </div>
@@ -2761,6 +2850,7 @@ function RequestDesignPanel({
       </div>
 
       <CreateRequestPanel
+        isDark={isDarkMode}
         saving={saving}
         newRequest={newRequest}
         setNewRequest={setNewRequest}
@@ -2777,36 +2867,37 @@ function RequestDesignPanel({
   );
 }
 
-function CategoryCard({ category, active, onClick, index }) {
+function CategoryCard({ category, active, onClick, index, isDark = false }) {
   return (
     <button
       onClick={onClick}
-      className={`request-fade min-h-[148px] rounded-[28px] border p-5 text-left transition duration-500 active:scale-[0.985] ${
-        active
-          ? "border-black bg-neutral-950 text-white shadow-[0_24px_80px_rgba(0,0,0,0.18)]"
-          : "border-white/70 bg-white/70 text-neutral-950 shadow-[0_18px_55px_rgba(0,0,0,0.055)] hover:bg-white"
+      data-active={active ? "true" : "false"}
+      className={`request-fade request-category-card min-h-[142px] rounded-[28px] border p-5 text-left transition duration-500 active:scale-[0.985] ${
+        isDark
+          ? active
+            ? "border-white/35 bg-white text-neutral-950 shadow-[0_24px_80px_rgba(0,0,0,0.35)]"
+            : "border-white/10 bg-white/[0.06] text-white shadow-[0_18px_55px_rgba(0,0,0,0.22)] hover:bg-white/[0.10]"
+          : active
+            ? "border-black bg-neutral-950 text-white shadow-[0_24px_80px_rgba(0,0,0,0.18)]"
+            : "border-white/70 bg-white/70 text-neutral-950 shadow-[0_18px_55px_rgba(0,0,0,0.055)] hover:bg-white"
       }`}
       style={{ animationDelay: `${index * 45}ms` }}
     >
-      <div className="flex h-full flex-col justify-between">
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <h3 className="text-xl font-semibold leading-[1.05] tracking-[-0.05em]">
-              {category.label}
-            </h3>
-
-            <p
-              className={`mt-2 line-clamp-2 text-sm leading-5 ${
-                active ? "text-white/60" : "text-neutral-500"
-              }`}
-            >
-              {category.desc}
-            </p>
-          </div>
+      <div className="flex h-full min-w-0 flex-col justify-between">
+        <div className="flex min-w-0 items-start justify-between gap-3">
+          <h3 className="min-w-0 flex-1 break-words pr-1 text-[19px] font-semibold leading-[1.08] tracking-[-0.055em]">
+            {category.label}
+          </h3>
 
           <span
-            className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium ${
-              active ? "bg-white/10 text-white/75" : "bg-neutral-100 text-neutral-500"
+            className={`shrink-0 whitespace-nowrap rounded-full px-3 py-1 text-xs font-medium ${
+              isDark
+                ? active
+                  ? "bg-neutral-950 text-white"
+                  : "bg-white/10 text-white/70"
+                : active
+                  ? "bg-white/10 text-white/75"
+                  : "bg-neutral-100 text-neutral-500"
             }`}
           >
             {category.active} active
@@ -2814,13 +2905,43 @@ function CategoryCard({ category, active, onClick, index }) {
         </div>
 
         <div>
+          <p
+            className={`mt-4 max-w-[135px] text-sm leading-5 ${
+              isDark
+                ? active
+                  ? "text-neutral-600"
+                  : "text-white/62"
+                : active
+                  ? "text-white/62"
+                  : "text-neutral-500"
+            }`}
+          >
+            {category.desc}
+          </p>
+
           <div
-            className={`mt-7 h-1.5 w-10 rounded-full ${
-              active ? "bg-white" : "bg-neutral-950"
+            className={`mt-5 h-1.5 w-10 rounded-full ${
+              isDark
+                ? active
+                  ? "bg-neutral-950"
+                  : "bg-white/24"
+                : active
+                  ? "bg-white"
+                  : "bg-neutral-950"
             }`}
           />
 
-          <p className={`mt-4 text-xs ${active ? "text-white/45" : "text-neutral-400"}`}>
+          <p
+            className={`mt-4 text-xs ${
+              isDark
+                ? active
+                  ? "text-neutral-600"
+                  : "text-white/45"
+                : active
+                  ? "text-white/45"
+                  : "text-neutral-400"
+            }`}
+          >
             {category.total} total
           </p>
         </div>
@@ -3067,6 +3188,7 @@ function RequestRow({
 }
 
 function CreateRequestPanel({
+  isDark = false,
   saving,
   newRequest,
   setNewRequest,
@@ -3081,13 +3203,20 @@ function CreateRequestPanel({
 }) {
   const tomorrowKey = getTomorrowKey();
   const [dragActive, setDragActive] = useState(false);
+  const createButtonClass = isDark
+    ? "bg-white text-neutral-950 hover:bg-white/90"
+    : "bg-neutral-950 text-white hover:bg-neutral-800";
 
   return (
-    <div className="lg:sticky lg:top-0 lg:h-[calc(100vh-238px)] min-h-0 overflow-hidden">
-      <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-[30px] border border-white/70 bg-white/68 shadow-[0_18px_60px_rgba(0,0,0,0.06)] backdrop-blur-xl">
+    <div className="self-start lg:sticky lg:top-5 flex max-h-[calc(100vh-150px)] min-h-0 flex-col overflow-hidden">
+      <div
+        className={`flex h-full min-h-0 flex-col overflow-hidden rounded-[30px] border shadow-[0_18px_60px_rgba(0,0,0,0.06)] backdrop-blur-xl ${
+          isDark ? "border-white/10 bg-white/[0.06]" : "border-white/70 bg-white/68"
+        }`}
+      >
         <div className="shrink-0 p-5 pb-3">
           <div className="flex items-start justify-between gap-4">
-            <div>
+            <div className="min-w-0">
               <p className="text-xs font-medium uppercase tracking-[0.2em] text-neutral-400">
                 Create
               </p>
@@ -3096,9 +3225,16 @@ function CreateRequestPanel({
               </h3>
             </div>
 
-            <div className="grid h-11 w-11 place-items-center rounded-2xl bg-neutral-950 text-white">
-              <Plus size={20} />
-            </div>
+            <button
+              type="button"
+              onClick={handleCreateRequest}
+              disabled={saving}
+              className={`inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-2xl px-4 text-sm font-semibold shadow-sm transition disabled:cursor-not-allowed disabled:opacity-60 active:scale-[0.985] ${createButtonClass}`}
+              title="Create Request"
+            >
+              {saving ? <Loader2 size={17} className="animate-spin" /> : <Send size={17} />}
+              <span>Create</span>
+            </button>
           </div>
         </div>
 
@@ -3212,7 +3348,7 @@ function CreateRequestPanel({
               value={newRequest.note}
               onChange={(e) => setNewRequest((prev) => ({ ...prev, note: e.target.value }))}
               placeholder="Write brief notes..."
-              rows={4}
+              rows={3}
               className="field-input resize-none"
             />
           </Field>
@@ -3246,8 +3382,12 @@ function CreateRequestPanel({
               uploadedFiles.length >= MAX_ATTACHMENTS
                 ? "cursor-not-allowed border-black/10 bg-white/50 opacity-55"
                 : dragActive
-                  ? "cursor-copy border-neutral-950 bg-white shadow-[0_18px_45px_rgba(0,0,0,0.08)]"
-                  : "cursor-pointer border-black/10 bg-white/70 hover:bg-white"
+                  ? isDark
+                    ? "cursor-copy border-white/40 bg-white/10 shadow-[0_18px_45px_rgba(0,0,0,0.22)]"
+                    : "cursor-copy border-neutral-950 bg-white shadow-[0_18px_45px_rgba(0,0,0,0.08)]"
+                  : isDark
+                    ? "cursor-pointer border-white/10 bg-white/[0.05] hover:bg-white/[0.08]"
+                    : "cursor-pointer border-black/10 bg-white/70 hover:bg-white"
             }`}
           >
             <UploadCloud className="mx-auto text-neutral-400" size={24} />
@@ -3281,10 +3421,10 @@ function CreateRequestPanel({
                 return (
                   <div
                     key={`${fileItem.id || file.name}-${index}`}
-                    className="rounded-2xl bg-neutral-100 p-3 text-sm"
+                    className={`rounded-2xl p-3 text-sm ${isDark ? "bg-white/[0.06]" : "bg-neutral-100"}`}
                   >
                     <div className="flex items-center justify-between gap-3">
-                      <span className="min-w-0 truncate text-neutral-600">
+                      <span className="min-w-0 truncate text-neutral-500">
                         Attachment {index + 1} · {formatFileSize(file.size)}
                       </span>
                       <button
@@ -3313,7 +3453,7 @@ function CreateRequestPanel({
             type="button"
             onClick={handleCreateRequest}
             disabled={saving}
-            className="mt-2 flex w-full items-center justify-center gap-2 rounded-[22px] bg-neutral-950 px-5 py-4 text-sm font-semibold text-white shadow-[0_18px_45px_rgba(0,0,0,0.18)] transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-60 active:scale-[0.985]"
+            className={`mt-1 flex w-full items-center justify-center gap-2 rounded-[22px] px-5 py-4 text-sm font-semibold shadow-[0_18px_45px_rgba(0,0,0,0.18)] transition disabled:cursor-not-allowed disabled:opacity-60 active:scale-[0.985] ${createButtonClass}`}
           >
             {saving ? <Loader2 size={17} className="animate-spin" /> : <Send size={17} />}
             {saving ? "Saving..." : "Create Request"}

@@ -447,6 +447,12 @@ export default function Catalog() {
     badge: "NEW CATALOG",
   });
 
+  const [sectionModalOpen, setSectionModalOpen] = useState(false);
+  const [sectionDraft, setSectionDraft] = useState({
+    title: "New Section",
+    subtitle: "Add asset folders here.",
+  });
+
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [trashOpen, setTrashOpen] = useState(false);
   const [lastTrashAction, setLastTrashAction] = useState(null);
@@ -471,6 +477,9 @@ export default function Catalog() {
   };
 
   const markCatalogDirty = () => {
+    // Keep the ref in sync immediately. React state updates are async,
+    // so this prevents realtime reloads / button actions from wiping fresh typing.
+    hasUnsavedChangesRef.current = true;
     setHasUnsavedChanges(true);
   };
 
@@ -753,12 +762,10 @@ export default function Catalog() {
     updateCatalog(activeCatalog.id, patch);
   };
 
-  const saveActiveCatalogChanges = async () => {
-    const catalogToSave = catalogs.find((catalog) => catalog.id === activeCatalogId);
-
+  const saveCatalogSnapshot = async (catalogToSave, options = { reload: true }) => {
     if (!catalogToSave) {
       setPageError("Tidak ada catalog aktif untuk disimpan.");
-      return;
+      return false;
     }
 
     setSyncing(true);
@@ -780,7 +787,7 @@ export default function Catalog() {
     if (catalogError) {
       setPageError(`Save catalog gagal: ${catalogError.message}`);
       setSyncing(false);
-      return;
+      return false;
     }
 
     for (const [sectionIndex, section] of (catalogToSave.sections || []).entries()) {
@@ -797,7 +804,7 @@ export default function Catalog() {
       if (sectionError) {
         setPageError(`Save section gagal: ${sectionError.message}`);
         setSyncing(false);
-        return;
+        return false;
       }
 
       for (const [assetIndex, asset] of (section.items || []).entries()) {
@@ -815,14 +822,35 @@ export default function Catalog() {
         if (assetError) {
           setPageError(`Save asset gagal: ${assetError.message}`);
           setSyncing(false);
-          return;
+          return false;
         }
       }
     }
 
+    hasUnsavedChangesRef.current = false;
     setHasUnsavedChanges(false);
-    await loadCatalogData(true);
+
+    if (options.reload) {
+      await loadCatalogData(true);
+    }
+
     setSyncing(false);
+    return true;
+  };
+
+  const saveActiveCatalogChanges = async () => {
+    const catalogToSave = catalogs.find((catalog) => catalog.id === activeCatalogId);
+    await saveCatalogSnapshot(catalogToSave, { reload: true });
+  };
+
+  const saveDraftBeforeReload = async () => {
+    if (!hasUnsavedChangesRef.current) return true;
+
+    const catalogToSave = catalogs.find((catalog) => catalog.id === activeCatalogId);
+
+    if (!catalogToSave) return true;
+
+    return saveCatalogSnapshot(catalogToSave, { reload: false });
   };
 
   const createCatalog = async () => {
@@ -832,6 +860,10 @@ export default function Catalog() {
       setPageError("Catalog title wajib diisi.");
       return;
     }
+
+    const saved = await saveDraftBeforeReload();
+
+    if (!saved) return;
 
     setSyncing(true);
 
@@ -891,6 +923,10 @@ export default function Catalog() {
   };
 
   const moveCatalog = async (catalogId, placement) => {
+    const saved = await saveDraftBeforeReload();
+
+    if (!saved) return;
+
     const currentIndex = catalogs.findIndex((catalog) => catalog.id === catalogId);
     if (currentIndex < 0) return;
 
@@ -900,17 +936,40 @@ export default function Catalog() {
     await persistSortOrder("catalogs", nextCatalogs);
   };
 
-  const addSection = async () => {
+  const openAddSectionModal = () => {
+    setSectionDraft({
+      title: "New Section",
+      subtitle: "Add asset folders here.",
+    });
+    setSectionModalOpen(true);
+  };
+
+  const createSection = async () => {
     if (!activeCatalog) return;
 
-    const nextOrder = (activeCatalog.sections || []).length + 1;
+    const title = sectionDraft.title.trim();
+
+    if (!title) {
+      setPageError("Section title wajib diisi.");
+      return;
+    }
+
+    const saved = await saveDraftBeforeReload();
+
+    if (!saved) return;
+
+    setSyncing(true);
+    setPageError("");
+
+    const latestCatalog = catalogs.find((catalog) => catalog.id === activeCatalog.id) || activeCatalog;
+    const nextOrder = (latestCatalog.sections || []).length + 1;
 
     const { data, error } = await supabase
       .from("catalog_sections")
       .insert({
         catalog_id: activeCatalog.id,
-        title: "New Section",
-        subtitle: "Add subtitle here.",
+        title,
+        subtitle: sectionDraft.subtitle.trim() || "",
         sort_order: nextOrder,
       })
       .select("*")
@@ -918,11 +977,19 @@ export default function Catalog() {
 
     if (error) {
       setPageError(`Add section gagal: ${error.message}`);
+      setSyncing(false);
       return;
     }
 
+    setSectionModalOpen(false);
+    setSectionDraft({
+      title: "New Section",
+      subtitle: "Add asset folders here.",
+    });
+
     setActiveSection(data.id);
     await loadCatalogData(true);
+    setSyncing(false);
   };
 
   const updateSection = (sectionId, patch) => {
@@ -947,6 +1014,10 @@ export default function Catalog() {
   const moveSection = async (sectionId, placement) => {
     if (!activeCatalog) return;
 
+    const saved = await saveDraftBeforeReload();
+
+    if (!saved) return;
+
     const sections = activeCatalog.sections || [];
     const currentIndex = sections.findIndex((section) => section.id === sectionId);
     if (currentIndex < 0) return;
@@ -966,7 +1037,15 @@ export default function Catalog() {
   const addAsset = async (sectionId) => {
     if (!activeCatalog) return;
 
-    const section = (activeCatalog.sections || []).find((item) => item.id === sectionId);
+    const saved = await saveDraftBeforeReload();
+
+    if (!saved) return;
+
+    setSyncing(true);
+    setPageError("");
+
+    const latestCatalog = catalogs.find((catalog) => catalog.id === activeCatalog.id) || activeCatalog;
+    const section = (latestCatalog.sections || []).find((item) => item.id === sectionId);
     const nextOrder = (section?.items || []).length + 1;
 
     const { error } = await supabase.from("catalog_assets").insert({
@@ -980,10 +1059,12 @@ export default function Catalog() {
 
     if (error) {
       setPageError(`Add asset gagal: ${error.message}`);
+      setSyncing(false);
       return;
     }
 
     await loadCatalogData(true);
+    setSyncing(false);
   };
 
   const updateAsset = (sectionId, assetId, patch) => {
@@ -1014,6 +1095,10 @@ export default function Catalog() {
 
   const moveAsset = async (sectionId, assetId, placement) => {
     if (!activeCatalog) return;
+
+    const saved = await saveDraftBeforeReload();
+
+    if (!saved) return;
 
     const section = (activeCatalog.sections || []).find((item) => item.id === sectionId);
     if (!section) return;
@@ -1051,7 +1136,11 @@ export default function Catalog() {
     };
   };
 
-  const askDeleteCatalog = (catalog) => {
+  const askDeleteCatalog = async (catalog) => {
+    const saved = await saveDraftBeforeReload();
+
+    if (!saved) return;
+
     setDeleteTarget({
       type: "catalog",
       title: catalog.title,
@@ -1060,7 +1149,11 @@ export default function Catalog() {
     });
   };
 
-  const askDeleteSection = (section) => {
+  const askDeleteSection = async (section) => {
+    const saved = await saveDraftBeforeReload();
+
+    if (!saved) return;
+
     setDeleteTarget({
       type: "section",
       title: section.title,
@@ -1069,7 +1162,11 @@ export default function Catalog() {
     });
   };
 
-  const askDeleteAsset = (section, asset) => {
+  const askDeleteAsset = async (section, asset) => {
+    const saved = await saveDraftBeforeReload();
+
+    if (!saved) return;
+
     setDeleteTarget({
       type: "asset",
       title: asset.name,
@@ -1459,6 +1556,10 @@ export default function Catalog() {
       return;
     }
 
+    const saved = await saveDraftBeforeReload();
+
+    if (!saved) return;
+
     setSyncing(true);
 
     const path = `catalog-covers/${activeCatalog.id}/${Date.now()}-${cleanFileName(file.name)}`;
@@ -1486,23 +1587,35 @@ export default function Catalog() {
     setSyncing(false);
   };
 
-  const openCatalog = (catalogId) => {
+  const openCatalog = async (catalogId) => {
+    const saved = await saveDraftBeforeReload();
+
+    if (!saved) return;
+
     setActiveCatalogId(catalogId);
     setActiveSection("all");
     setSearch("");
   };
 
-  const backToLibrary = () => {
+  const backToLibrary = async () => {
+    const saved = await saveDraftBeforeReload();
+
+    if (!saved) return;
+
     setActiveCatalogId(null);
     setActiveSection("all");
     setSearch("");
   };
 
-  const handleBack = () => {
+  const handleBack = async () => {
     if (activeCatalog) {
-      backToLibrary();
+      await backToLibrary();
       return;
     }
+
+    const saved = await saveDraftBeforeReload();
+
+    if (!saved) return;
 
     navigateTo(BACK_TO_POPUP_URL);
   };
@@ -1661,7 +1774,7 @@ export default function Catalog() {
                           )}
 
                           <button
-                            onClick={addSection}
+                            onClick={openAddSectionModal}
                             className="inline-flex items-center gap-2 rounded-full bg-neutral-950 px-4 py-2 text-xs font-semibold text-white transition hover:bg-neutral-800"
                           >
                             <Plus size={15} />
@@ -1689,6 +1802,7 @@ export default function Catalog() {
                             onDeleteAsset={askDeleteAsset}
                             onMoveSection={moveSection}
                             onMoveAsset={moveAsset}
+                            onSoftSaveDraft={saveDraftBeforeReload}
                           />
                         ))}
                       </div>
@@ -1753,6 +1867,16 @@ export default function Catalog() {
         />
       )}
 
+      {sectionModalOpen && (
+        <SectionCreateModal
+          draft={sectionDraft}
+          setDraft={setSectionDraft}
+          onClose={() => setSectionModalOpen(false)}
+          onCreate={createSection}
+          syncing={syncing}
+        />
+      )}
+
       {deleteTarget && (
         <DeleteConfirmModal
           title={deleteTarget.title}
@@ -1810,6 +1934,41 @@ function CatalogSidebar({
   syncing,
 }) {
   const totalAssets = catalogs.reduce((total, catalog) => total + countCatalogAssets(catalog), 0);
+  const [expandedCatalogId, setExpandedCatalogId] = useState(activeCatalog?.id || null);
+
+  useEffect(() => {
+    if (!activeCatalog?.id) {
+      setExpandedCatalogId(null);
+      return;
+    }
+
+    setExpandedCatalogId(activeCatalog.id);
+  }, [activeCatalog?.id]);
+
+  const handleCatalogToggle = (catalog) => {
+    const isActiveCatalog = activeCatalog?.id === catalog.id;
+
+    if (isActiveCatalog) {
+      setExpandedCatalogId((currentId) => {
+        const nextId = currentId === catalog.id ? null : catalog.id;
+
+        if (!nextId) {
+          setActiveSection("all");
+        }
+
+        return nextId;
+      });
+      return;
+    }
+
+    setExpandedCatalogId(catalog.id);
+    onOpenCatalog(catalog.id);
+  };
+
+  const handleOpenLibrary = () => {
+    setExpandedCatalogId(null);
+    onOpenLibrary();
+  };
 
   return (
     <div className="flex h-full flex-col rounded-[32px] border border-white/70 bg-white/62 p-4 shadow-[0_22px_70px_rgba(0,0,0,0.07)] backdrop-blur-xl">
@@ -1878,7 +2037,7 @@ function CatalogSidebar({
 
       <div className="catalog-scroll mt-5 min-h-0 flex-1 space-y-1 overflow-y-auto pr-1">
         <button
-          onClick={onOpenLibrary}
+          onClick={handleOpenLibrary}
           className={`flex w-full items-center justify-between rounded-2xl px-3 py-3 text-left transition ${
             !activeCatalog
               ? "bg-white text-neutral-950 shadow-sm"
@@ -1893,19 +2052,28 @@ function CatalogSidebar({
 
         {catalogs.map((catalog) => {
           const isActiveCatalog = activeCatalog?.id === catalog.id;
+          const isExpandedCatalog = isActiveCatalog && expandedCatalogId === catalog.id;
+          const FolderIcon = isExpandedCatalog ? FolderOpen : Folder;
 
           return (
             <div key={catalog.id}>
               <button
-                onClick={() => onOpenCatalog(catalog.id)}
+                onClick={() => handleCatalogToggle(catalog)}
                 className={`flex w-full items-center justify-between rounded-2xl px-3 py-3 text-left transition ${
                   isActiveCatalog
                     ? "bg-white text-neutral-950 shadow-sm"
                     : "text-neutral-500 hover:bg-white/70 hover:text-neutral-950"
                 }`}
+                title={
+                  isActiveCatalog
+                    ? isExpandedCatalog
+                      ? "Collapse folder"
+                      : "Expand folder"
+                    : "Open catalog"
+                }
               >
                 <span className="flex min-w-0 items-center gap-3">
-                  <Folder className="h-[18px] w-[18px] shrink-0" strokeWidth={1.8} />
+                  <FolderIcon className="h-[18px] w-[18px] shrink-0" strokeWidth={1.8} />
                   <span className="truncate text-sm font-medium">{catalog.title}</span>
                 </span>
                 <span className="shrink-0 text-xs text-neutral-400">
@@ -1913,7 +2081,7 @@ function CatalogSidebar({
                 </span>
               </button>
 
-              {isActiveCatalog && (
+              {isExpandedCatalog && (
                 <div className="mt-1 space-y-1 pl-5">
                   <button
                     onClick={() => setActiveSection("all")}
@@ -1952,12 +2120,13 @@ function CatalogSidebar({
         </div>
         <p className="text-sm font-medium tracking-[-0.02em]">Before sharing</p>
         <p className="mt-2 text-xs leading-5 text-neutral-500">
-          Check latest brief, price, platform, and placement before using any catalog material.
+          Double check the price & asset details before using any catalog material.
         </p>
       </div>
     </div>
   );
 }
+
 
 function CatalogLibrary({
   catalogs,
@@ -2421,6 +2590,7 @@ function CatalogAssetSection({
   onDeleteAsset,
   onMoveSection,
   onMoveAsset,
+  onSoftSaveDraft,
 }) {
   return (
     <div
@@ -2439,6 +2609,7 @@ function CatalogAssetSection({
                 <input
                   value={section.title}
                   onChange={(event) => onUpdateSection(section.id, { title: event.target.value })}
+                  onBlur={onSoftSaveDraft}
                   className="catalog-input"
                   placeholder="Section title"
                 />
@@ -2448,6 +2619,7 @@ function CatalogAssetSection({
                   spellCheck={false}
                   value={section.subtitle || ""}
                   onChange={(event) => onUpdateSection(section.id, { subtitle: event.target.value })}
+                  onBlur={onSoftSaveDraft}
                   className="catalog-input"
                   placeholder="Section subtitle"
                 />
@@ -2518,6 +2690,7 @@ function CatalogAssetSection({
             onUpdateAsset={onUpdateAsset}
             onDeleteAsset={onDeleteAsset}
             onMoveAsset={onMoveAsset}
+            onSoftSaveDraft={onSoftSaveDraft}
           />
         ))}
       </div>
@@ -2533,6 +2706,7 @@ function CatalogAssetCard({
   onUpdateAsset,
   onDeleteAsset,
   onMoveAsset,
+  onSoftSaveDraft,
 }) {
   if (editMode) {
     return (
@@ -2573,6 +2747,7 @@ function CatalogAssetCard({
                   spellCheck={false}
             value={asset.name || ""}
             onChange={(event) => onUpdateAsset(section.id, asset.id, { name: event.target.value })}
+            onBlur={onSoftSaveDraft}
             className="catalog-input"
             placeholder="Asset name"
           />
@@ -2582,6 +2757,7 @@ function CatalogAssetCard({
                   spellCheck={false}
             value={asset.type || ""}
             onChange={(event) => onUpdateAsset(section.id, asset.id, { type: event.target.value })}
+            onBlur={onSoftSaveDraft}
             className="catalog-input"
             placeholder="Type"
           />
@@ -2591,6 +2767,7 @@ function CatalogAssetCard({
                   spellCheck={false}
             value={asset.url || ""}
             onChange={(event) => onUpdateAsset(section.id, asset.id, { url: event.target.value })}
+            onBlur={onSoftSaveDraft}
             className="catalog-input"
             placeholder="Drive / link URL"
           />
@@ -2873,6 +3050,81 @@ function CatalogCreateModal({ draft, setDraft, onClose, onCreate, syncing }) {
     </div>
   );
 }
+
+function SectionCreateModal({ draft, setDraft, onClose, onCreate, syncing }) {
+  return (
+    <div className="fixed inset-0 z-[1000] grid place-items-center bg-black/25 px-5 backdrop-blur-sm">
+      <div className="w-full max-w-lg rounded-[30px] border border-black/5 bg-white p-6 shadow-[0_35px_100px_rgba(0,0,0,0.22)]">
+        <div className="mb-5 flex items-start justify-between gap-4">
+          <div className="grid h-12 w-12 place-items-center rounded-2xl bg-neutral-100">
+            <Plus size={23} strokeWidth={1.8} />
+          </div>
+
+          <button
+            onClick={onClose}
+            className="grid h-10 w-10 place-items-center rounded-full bg-neutral-100 text-neutral-500 transition hover:bg-neutral-200 hover:text-neutral-950"
+          >
+            <X size={20} strokeWidth={1.8} />
+          </button>
+        </div>
+
+        <h3 className="text-2xl font-semibold tracking-[-0.05em]">
+          Add new section
+        </h3>
+
+        <p className="mt-2 text-sm leading-6 text-neutral-500">
+          Create a section first, then add asset folders inside it.
+        </p>
+
+        <div className="mt-5 space-y-3">
+          <input
+            value={draft.title}
+            onChange={(event) =>
+              setDraft((prev) => ({ ...prev, title: event.target.value }))
+            }
+            className="catalog-input"
+            placeholder="Section title"
+            autoComplete="off"
+            autoCorrect="off"
+            spellCheck={false}
+          />
+
+          <input
+            value={draft.subtitle}
+            onChange={(event) =>
+              setDraft((prev) => ({ ...prev, subtitle: event.target.value }))
+            }
+            className="catalog-input"
+            placeholder="Section subtitle"
+            autoComplete="off"
+            autoCorrect="off"
+            spellCheck={false}
+          />
+        </div>
+
+        <div className="mt-5 grid grid-cols-2 gap-3">
+          <button
+            onClick={onClose}
+            disabled={syncing}
+            className="flex w-full items-center justify-center gap-2 rounded-2xl bg-neutral-100 px-5 py-3.5 text-sm font-semibold text-neutral-600 transition hover:bg-neutral-200 hover:text-neutral-950 active:scale-95 disabled:opacity-50"
+          >
+            Cancel
+          </button>
+
+          <button
+            onClick={onCreate}
+            disabled={syncing}
+            className="flex w-full items-center justify-center gap-2 rounded-2xl bg-neutral-950 px-5 py-3.5 text-sm font-semibold text-white transition hover:bg-neutral-800 active:scale-95 disabled:opacity-50"
+          >
+            {syncing ? <Loader2 size={17} className="animate-spin" /> : <Plus size={17} />}
+            Create Section
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 
 function DeleteConfirmModal({ title, message, onCancel, onConfirm }) {
   return (
