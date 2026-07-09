@@ -15,7 +15,9 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { supabase } from "./supabaseClient";
 
+const CANVAS_TABLE = "canvas_notes";
 const STORAGE_KEY = "systemadf_canvas_notes_full_v3"; // keep key so existing notes stay
 const SCOPE_KEY = "systemadf_canvas_scope_full_v3";
 
@@ -233,6 +235,56 @@ function normalizeNote(note, index = 0) {
     x: Number.isFinite(note.x) ? note.x : 80 + (index % 3) * 420,
     y: Number.isFinite(note.y) ? note.y : 180 + Math.floor(index / 3) * 280,
     updatedAt: note.updatedAt || nowLabel(),
+  };
+}
+
+function dbRowToNote(row, index = 0) {
+  return normalizeNote(
+    {
+      id: row.id,
+      title: row.title,
+      body: row.body,
+      type: row.type,
+      scope: row.scope,
+      color: row.color,
+      style: row.style,
+      pinned: row.pinned,
+      linkLabel: row.link_label,
+      linkUrl: row.link_url,
+      checklistRows: row.checklist_rows,
+      priceRows: row.price_rows,
+      compareRows: row.compare_rows,
+      boardRows: row.board_rows,
+      x: Number(row.x),
+      y: Number(row.y),
+      updatedAt: row.updated_at
+        ? new Date(row.updated_at).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })
+        : nowLabel(),
+    },
+    index
+  );
+}
+
+function noteToDbRow(note) {
+  const clean = normalizeNote(note);
+  return {
+    id: clean.id,
+    title: clean.title,
+    body: clean.body,
+    type: clean.type,
+    scope: clean.scope,
+    color: clean.color,
+    style: clean.style,
+    pinned: Boolean(clean.pinned),
+    x: Math.round(Number(clean.x) || 0),
+    y: Math.round(Number(clean.y) || 0),
+    link_label: clean.linkLabel || "Open link",
+    link_url: clean.linkUrl || "",
+    checklist_rows: clean.checklistRows || [],
+    price_rows: clean.priceRows || [],
+    compare_rows: clean.compareRows || [],
+    board_rows: clean.boardRows || [],
+    updated_at: new Date().toISOString(),
   };
 }
 
@@ -883,11 +935,7 @@ function Inspector({ note, onEdit, onCreate }) {
 export default function CanvasNotesPanel() {
   const boardRef = useRef(null);
   const dragRef = useRef(null);
-  const [notes, setNotes] = useState(() => {
-    if (typeof window === "undefined") return seedNotes();
-    const stored = safeParse(window.localStorage.getItem(STORAGE_KEY));
-    return (stored && stored.length ? stored : seedNotes()).map(normalizeNote);
-  });
+  const [notes, setNotes] = useState(() => seedNotes().map(normalizeNote));
   const [scope, setScope] = useState(() => {
     if (typeof window === "undefined") return "Personal";
     return window.localStorage.getItem(SCOPE_KEY) || "Personal";
@@ -896,6 +944,51 @@ export default function CanvasNotesPanel() {
   const [draft, setDraft] = useState(null);
   const [draggingId, setDraggingId] = useState(null);
   const [copied, setCopied] = useState(false);
+  const [loadingLive, setLoadingLive] = useState(true);
+  const [liveError, setLiveError] = useState("");
+
+  const loadLiveNotes = useCallback(async () => {
+    setLiveError("");
+
+    const { data, error } = await supabase
+      .from(CANVAS_TABLE)
+      .select("*")
+      .order("updated_at", { ascending: false });
+
+    if (error) {
+      setLiveError(`Canvas notes belum live: ${error.message}`);
+      const stored = typeof window !== "undefined" ? safeParse(window.localStorage.getItem(STORAGE_KEY)) : null;
+      setNotes((stored && stored.length ? stored : seedNotes()).map(normalizeNote));
+      setLoadingLive(false);
+      return;
+    }
+
+    if (!data || data.length === 0) {
+      const seeded = seedNotes().map(normalizeNote);
+      setNotes(seeded);
+      await supabase.from(CANVAS_TABLE).upsert(seeded.map(noteToDbRow));
+      setLoadingLive(false);
+      return;
+    }
+
+    setNotes(data.map(dbRowToNote));
+    setLoadingLive(false);
+  }, []);
+
+  useEffect(() => {
+    loadLiveNotes();
+
+    const channel = supabase
+      .channel("systemadf-canvas-notes-live")
+      .on("postgres_changes", { event: "*", schema: "public", table: CANVAS_TABLE }, () => {
+        loadLiveNotes();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [loadLiveNotes]);
 
   useEffect(() => {
     if (typeof window !== "undefined") window.localStorage.setItem(STORAGE_KEY, JSON.stringify(notes));
@@ -925,34 +1018,79 @@ export default function CanvasNotesPanel() {
     setSelectedId(note.id);
   }, []);
 
-  const saveDraft = useCallback(() => {
+  const saveDraft = useCallback(async () => {
     if (!draft) return;
+
+    const isNew = !draft.id;
     const clean = normalizeNote({
       ...draft,
+      id: draft.id || uid(),
       title: draft.title?.trim() || "Untitled note",
       updatedAt: nowLabel(),
-      x: Number.isFinite(draft.x) ? draft.x : 120,
-      y: Number.isFinite(draft.y) ? draft.y : 160,
+      x: Number.isFinite(draft.x) ? draft.x : 120 + (notes.length % 4) * 70,
+      y: Number.isFinite(draft.y) ? draft.y : 140 + (notes.length % 5) * 55,
     });
 
     setNotes((prev) => {
       const exists = prev.some((note) => note.id === clean.id);
       if (exists) return prev.map((note) => (note.id === clean.id ? clean : note));
-      return [...prev, { ...clean, id: uid(), x: 120 + (prev.length % 4) * 70, y: 140 + (prev.length % 5) * 55 }];
+      return [...prev, clean];
     });
     setScope(clean.scope);
     setSelectedId(clean.id);
     setDraft(null);
-  }, [draft]);
 
-  const deleteNote = useCallback((id) => {
+    const { error } = await supabase.from(CANVAS_TABLE).upsert(noteToDbRow(clean));
+    if (error) {
+      setLiveError(`Gagal simpan live note: ${error.message}`);
+      if (isNew) setDraft(clean);
+    }
+  }, [draft, notes.length]);
+
+  const deleteNote = useCallback(async (id) => {
+    const previous = notes;
     setNotes((prev) => prev.filter((note) => note.id !== id));
     if (selectedId === id) setSelectedId(null);
-  }, [selectedId]);
 
-  const togglePin = useCallback((id) => {
-    setNotes((prev) => prev.map((note) => (note.id === id ? { ...note, pinned: !note.pinned, updatedAt: nowLabel() } : note)));
+    const { error } = await supabase.from(CANVAS_TABLE).delete().eq("id", id);
+    if (error) {
+      setLiveError(`Gagal hapus live note: ${error.message}`);
+      setNotes(previous);
+    }
+  }, [notes, selectedId]);
+
+  const togglePin = useCallback(async (id) => {
+    let updated = null;
+    setNotes((prev) =>
+      prev.map((note) => {
+        if (note.id !== id) return note;
+        updated = { ...note, pinned: !note.pinned, updatedAt: nowLabel() };
+        return updated;
+      })
+    );
+
+    setTimeout(async () => {
+      if (!updated) return;
+      const { error } = await supabase.from(CANVAS_TABLE).upsert(noteToDbRow(updated));
+      if (error) setLiveError(`Gagal update pin: ${error.message}`);
+    }, 0);
   }, []);
+
+  const persistPosition = useCallback(async (id, x, y) => {
+    const target = notes.find((note) => note.id === id);
+    if (!target) return;
+
+    const updated = { ...target, x, y, updatedAt: nowLabel() };
+    const { error } = await supabase
+      .from(CANVAS_TABLE)
+      .update({ x: Math.round(x), y: Math.round(y), updated_at: new Date().toISOString() })
+      .eq("id", id);
+
+    if (error) {
+      setLiveError(`Gagal simpan posisi note: ${error.message}`);
+      await supabase.from(CANVAS_TABLE).upsert(noteToDbRow(updated));
+    }
+  }, [notes]);
 
   const handleDragStart = useCallback((id, event) => {
     event.preventDefault();
@@ -966,6 +1104,8 @@ export default function CanvasNotesPanel() {
       startY: event.clientY,
       originX: note.x || 0,
       originY: note.y || 0,
+      latestX: note.x || 0,
+      latestY: note.y || 0,
     };
     setDraggingId(id);
     setSelectedId(id);
@@ -977,25 +1117,41 @@ export default function CanvasNotesPanel() {
       const rect = board.getBoundingClientRect();
       const nextX = clamp(drag.originX + (moveEvent.clientX - drag.startX), 20, Math.max(20, rect.width - noteWidth(note.type) - 20));
       const nextY = clamp(drag.originY + (moveEvent.clientY - drag.startY), 20, Math.max(20, rect.height - 220));
+      drag.latestX = nextX;
+      drag.latestY = nextY;
       setNotes((prev) => prev.map((item) => (item.id === drag.id ? { ...item, x: nextX, y: nextY } : item)));
     };
 
     const up = () => {
+      const drag = dragRef.current;
       dragRef.current = null;
       setDraggingId(null);
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
+      if (drag) persistPosition(drag.id, drag.latestX, drag.latestY);
     };
 
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
-  }, [notes]);
+  }, [notes, persistPosition]);
 
-  const resetBoard = useCallback(() => {
+  const resetBoard = useCallback(async () => {
+    const ok = window.confirm("Reset all canvas notes for everyone? This will replace live notes with starter notes.");
+    if (!ok) return;
+
     const seeded = seedNotes().map(normalizeNote);
     setNotes(seeded);
     setScope("Personal");
     setSelectedId(seeded[0]?.id || null);
+
+    const { error: deleteError } = await supabase.from(CANVAS_TABLE).delete().neq("id", "__never__");
+    if (deleteError) {
+      setLiveError(`Gagal reset notes: ${deleteError.message}`);
+      return;
+    }
+
+    const { error } = await supabase.from(CANVAS_TABLE).upsert(seeded.map(noteToDbRow));
+    if (error) setLiveError(`Gagal isi ulang notes: ${error.message}`);
   }, []);
 
   const copyAll = useCallback(async () => {
@@ -1016,8 +1172,13 @@ export default function CanvasNotesPanel() {
           <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-neutral-400">Notes</p>
           <h1 className="mt-1 text-[34px] font-semibold leading-tight tracking-[-0.045em] text-neutral-950">Canvas Board</h1>
           <p className="mt-2 max-w-2xl text-sm font-normal leading-6 text-neutral-500">
-            Drag notes freely like a lightweight Milanote board. Price and Compare cards use editable table columns.
+            Live canvas notes sync through Supabase. Drag, edit, and table changes update for everyone.
           </p>
+          {liveError && (
+            <p className="mt-3 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs font-medium leading-5 text-amber-700">
+              {liveError}
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {SCOPES.map((item) => (
@@ -1038,7 +1199,7 @@ export default function CanvasNotesPanel() {
           <div className="relative overflow-auto rounded-[26px] border border-black/5 bg-[radial-gradient(circle_at_1px_1px,rgba(0,0,0,.07)_1px,transparent_0)] [background-size:24px_24px]">
             <div ref={boardRef} className="relative min-h-[880px] min-w-[1280px]">
               <div className="absolute left-5 top-5 z-20 inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-medium text-neutral-600 shadow-sm">
-                <Folder size={15} /> {scope} · {visibleNotes.length} notes
+                <Folder size={15} /> {scope} · {loadingLive ? "loading" : visibleNotes.length} notes
               </div>
 
               {visibleNotes.map((note) => (
