@@ -575,33 +575,214 @@ function getRequestDisplayName(request = {}) {
   );
 }
 
-function RequesterAvatar({ request, size = "md" }) {
+function getRequesterKey(request = {}) {
+  return String(
+    request.requester_user_id ||
+      request.requester_email ||
+      request.requester_profile?.email ||
+      getRequestDisplayName(request)
+  )
+    .trim()
+    .toLowerCase();
+}
+
+function getRequesterStats(requests = []) {
+  return requests.reduce((acc, request) => {
+    const key = getRequesterKey(request);
+    if (!key) return acc;
+
+    if (!acc[key]) {
+      acc[key] = {
+        total: 0,
+        done: 0,
+        active: 0,
+        latestCategory: formatCategoryLabel(request.category),
+        latestPlatform: request.platform || "Internal",
+        latestTeam: request.requester_team || request.requester_profile?.team || "",
+        email: request.requester_email || request.requester_profile?.email || "",
+      };
+    }
+
+    acc[key].total += 1;
+
+    if (getDisplayStatus(request) === "Done") {
+      acc[key].done += 1;
+    } else {
+      acc[key].active += 1;
+    }
+
+    if (request.requester_team || request.requester_profile?.team) {
+      acc[key].latestTeam = request.requester_team || request.requester_profile?.team;
+    }
+
+    if (request.platform) acc[key].latestPlatform = request.platform;
+    if (request.category) acc[key].latestCategory = formatCategoryLabel(request.category);
+    if (request.requester_email || request.requester_profile?.email) {
+      acc[key].email = request.requester_email || request.requester_profile?.email;
+    }
+
+    return acc;
+  }, {});
+}
+
+const REQUEST_DRAFTS_STORAGE_KEY = "systemadf-request-drafts-v1";
+
+function makeDraftId() {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
+  return `draft-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function getEmptyRequestDraft(category = "realme") {
+  return {
+    category,
+    requester: "",
+    title: "",
+    type: "",
+    platform: "",
+    due: "",
+    priority: "Medium",
+    drive_link: "",
+    note: "",
+  };
+}
+
+function getSerializableDraft(draft) {
+  return {
+    id: draft.id,
+    savedAt: draft.savedAt,
+    request: draft.request,
+    fileSummaries: draft.fileSummaries || [],
+  };
+}
+
+function loadRequestDrafts() {
+  if (typeof window === "undefined") return [];
+
+  try {
+    const raw = window.localStorage.getItem(REQUEST_DRAFTS_STORAGE_KEY);
+    if (!raw) return [];
+
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistRequestDrafts(drafts = []) {
+  if (typeof window === "undefined") return;
+
+  try {
+    window.localStorage.setItem(
+      REQUEST_DRAFTS_STORAGE_KEY,
+      JSON.stringify(drafts.map(getSerializableDraft))
+    );
+  } catch {
+    // localStorage can be full or blocked. Draft still stays in current session state.
+  }
+}
+
+function RequesterAvatar({ request, size = "md", onClick, active = false }) {
   const displayName = getRequestDisplayName(request);
   const avatar = getAvatarByKey(getRequestAvatarKey(request));
   const isSmall = size === "sm";
+  const className = `shrink-0 overflow-hidden rounded-full border bg-white shadow-sm transition ${
+    isSmall ? "h-9 w-9" : "h-12 w-12"
+  } ${onClick ? "cursor-pointer hover:scale-105 hover:shadow-md" : ""} ${
+    active ? "border-neutral-950 ring-4 ring-neutral-950/10" : "border-black/5"
+  }`;
+
+  const content = avatar?.src ? (
+    <img
+      src={avatar.src}
+      alt={displayName}
+      className="h-full w-full object-cover"
+      draggable={false}
+    />
+  ) : (
+    <div className="grid h-full w-full place-items-center bg-neutral-100 text-xs font-bold text-neutral-600">
+      {getProfileInitial(displayName)}
+    </div>
+  );
+
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} className={className} title={`View ${displayName} profile`}>
+        {content}
+      </button>
+    );
+  }
 
   return (
-    <div
-      className={`shrink-0 overflow-hidden rounded-full border border-black/5 bg-white shadow-sm ${
-        isSmall ? "h-9 w-9" : "h-12 w-12"
-      }`}
-      title={displayName}
-    >
-      {avatar?.src ? (
-        <img
-          src={avatar.src}
-          alt={displayName}
-          className="h-full w-full object-cover"
-          draggable={false}
-        />
-      ) : (
-        <div className="grid h-full w-full place-items-center bg-neutral-100 text-xs font-bold text-neutral-600">
-          {getProfileInitial(displayName)}
-        </div>
-      )}
+    <div className={className} title={displayName}>
+      {content}
     </div>
   );
 }
+
+function RequesterMiniProfile({ request, stats, onClose }) {
+  useEscapeClose(onClose);
+
+  const displayName = getRequestDisplayName(request);
+  const avatar = getAvatarByKey(getRequestAvatarKey(request));
+  const team = stats?.latestTeam || request.requester_team || request.requester_profile?.team || "Team not set";
+  const from = `${formatCategoryLabel(request.category)} · ${request.platform || "Internal"}`;
+  const total = stats?.total || 1;
+  const done = stats?.done || (getDisplayStatus(request) === "Done" ? 1 : 0);
+  const active = stats?.active || (getDisplayStatus(request) === "Done" ? 0 : 1);
+
+  return (
+    <div className="absolute left-0 top-14 z-[80] w-[280px] rounded-[24px] border border-white/80 bg-white/95 p-4 shadow-[0_24px_75px_rgba(0,0,0,0.18)] backdrop-blur-xl">
+      <div className="flex items-start gap-3">
+        <div className="h-14 w-14 shrink-0 overflow-hidden rounded-2xl border border-black/5 bg-neutral-100">
+          {avatar?.src ? (
+            <img src={avatar.src} alt={displayName} className="h-full w-full object-cover" draggable={false} />
+          ) : (
+            <div className="grid h-full w-full place-items-center text-sm font-bold text-neutral-600">
+              {getProfileInitial(displayName)}
+            </div>
+          )}
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="truncate text-base font-semibold tracking-[-0.04em] text-neutral-950">{displayName}</p>
+              <p className="mt-0.5 truncate text-xs font-medium text-neutral-500">{team}</p>
+            </div>
+            <button type="button" onClick={onClose} className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-neutral-100 text-neutral-400 hover:text-neutral-900">
+              <X size={14} />
+            </button>
+          </div>
+          <p className="mt-2 text-xs leading-5 text-neutral-500">{from}</p>
+          {(stats?.email || request.requester_email || request.requester_profile?.email) && (
+            <p className="mt-1 truncate text-[11px] text-neutral-400">
+              {stats?.email || request.requester_email || request.requester_profile?.email}
+            </p>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-4 grid grid-cols-3 gap-2">
+        <div className="rounded-2xl bg-neutral-50 p-3 text-center">
+          <p className="text-lg font-semibold tracking-[-0.05em] text-neutral-950">{total}</p>
+          <p className="mt-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-neutral-400">Total</p>
+        </div>
+        <div className="rounded-2xl bg-emerald-50 p-3 text-center">
+          <p className="text-lg font-semibold tracking-[-0.05em] text-emerald-700">{done}</p>
+          <p className="mt-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-600/60">Done</p>
+        </div>
+        <div className="rounded-2xl bg-amber-50 p-3 text-center">
+          <p className="text-lg font-semibold tracking-[-0.05em] text-amber-700">{active}</p>
+          <p className="mt-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-600/60">Active</p>
+        </div>
+      </div>
+
+      <p className="mt-3 text-center text-[11px] font-medium text-neutral-400">Click avatar again or Esc to close.</p>
+    </div>
+  );
+}
+
 
 function requestNotificationTarget(request = {}) {
   const userId = request.requester_user_id || request.requester_profile?.id || null;
@@ -2031,6 +2212,7 @@ export default function RequestPage() {
                   newRequest={newRequest}
                   setNewRequest={setNewRequest}
                   uploadedFiles={uploadedFiles}
+                  setUploadedFiles={setUploadedFiles}
                   handleFileUpload={handleFileUpload}
                   handleFileDrop={handleFileDrop}
                   handleRemoveUploadedFile={handleRemoveUploadedFile}
@@ -2899,6 +3081,7 @@ function RequestDesignPanel({
   newRequest,
   setNewRequest,
   uploadedFiles,
+  setUploadedFiles,
   handleFileUpload,
   handleFileDrop,
   handleRemoveUploadedFile,
@@ -2912,6 +3095,8 @@ function RequestDesignPanel({
   onPreviewRequest,
   onEditRequest,
 }) {
+  const requesterStats = useMemo(() => getRequesterStats(filteredRequests), [filteredRequests]);
+
   return (
     <section className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_390px]">
       <div>
@@ -2971,6 +3156,7 @@ function RequestDesignPanel({
                   key={request.id}
                   request={request}
                   variant="request"
+                  requesterStats={requesterStats[getRequesterKey(request)]}
                   onOpenAssets={onOpenAssets}
                   onPreviewRequest={onPreviewRequest}
                   onEditRequest={onEditRequest}
@@ -2986,6 +3172,7 @@ function RequestDesignPanel({
         newRequest={newRequest}
         setNewRequest={setNewRequest}
         uploadedFiles={uploadedFiles}
+        setUploadedFiles={setUploadedFiles}
         handleFileUpload={handleFileUpload}
         handleFileDrop={handleFileDrop}
         handleRemoveUploadedFile={handleRemoveUploadedFile}
@@ -3088,6 +3275,7 @@ function RequestRow({
   onOpenAssets,
   onPreviewRequest,
   onEditRequest,
+  requesterStats,
   onDragStart,
   onDropOnRequest,
 }) {
@@ -3098,6 +3286,7 @@ function RequestRow({
 
   const isAdmin = variant === "admin";
   const isRequestView = variant === "request";
+  const [profileOpen, setProfileOpen] = useState(false);
 
   return (
     <div
@@ -3144,7 +3333,16 @@ function RequestRow({
             </div>
           )}
 
-          <RequesterAvatar request={request} />
+          <div className="relative shrink-0">
+            <RequesterAvatar request={request} onClick={() => setProfileOpen((prev) => !prev)} active={profileOpen} />
+            {profileOpen && (
+              <RequesterMiniProfile
+                request={request}
+                stats={requesterStats}
+                onClose={() => setProfileOpen(false)}
+              />
+            )}
+          </div>
 
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
@@ -3269,6 +3467,7 @@ function CreateRequestPanel({
   newRequest,
   setNewRequest,
   uploadedFiles,
+  setUploadedFiles,
   handleFileUpload,
   handleFileDrop,
   handleRemoveUploadedFile,
@@ -3281,10 +3480,98 @@ function CreateRequestPanel({
   const tomorrowKey = getTomorrowKey();
   const [dragActive, setDragActive] = useState(false);
   const [createConfirmOpen, setCreateConfirmOpen] = useState(false);
+  const [draftListOpen, setDraftListOpen] = useState(false);
+  const [activeDraftId, setActiveDraftId] = useState(null);
+  const [requestDrafts, setRequestDrafts] = useState(() => loadRequestDrafts());
   const [annotateIndex, setAnnotateIndex] = useState(null);
+  const panelRef = useRef(null);
+  const rafRef = useRef(null);
+  const [panelHeight, setPanelHeight] = useState(null);
+
+  useEffect(() => {
+    const updatePanelHeight = () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+
+      rafRef.current = requestAnimationFrame(() => {
+        const element = panelRef.current;
+        if (!element) return;
+
+        const rect = element.getBoundingClientRect();
+        const bottomGap = 18;
+        const nextHeight = Math.max(420, Math.floor(window.innerHeight - rect.top - bottomGap));
+
+        setPanelHeight(nextHeight);
+      });
+    };
+
+    updatePanelHeight();
+    window.addEventListener("resize", updatePanelHeight);
+    window.addEventListener("scroll", updatePanelHeight, true);
+
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      window.removeEventListener("resize", updatePanelHeight);
+      window.removeEventListener("scroll", updatePanelHeight, true);
+    };
+  }, []);
 
   const activeAnnotationItem =
     annotateIndex === null || annotateIndex < 0 ? null : uploadedFiles[annotateIndex];
+
+  const saveCurrentDraft = () => {
+    const fileSummaries = uploadedFiles.map((item) => {
+      const file = item?.file || item;
+      return {
+        name: file?.name || item?.name || "Attachment",
+        size: file?.size ? formatFileSize(file.size) : item?.size || "",
+        type: file?.type || item?.type || "",
+        note: item?.note || "",
+      };
+    });
+
+    const trimmedTitle = newRequest.title.trim();
+    const nextDraft = {
+      id: activeDraftId || makeDraftId(),
+      savedAt: new Date().toISOString(),
+      request: { ...newRequest },
+      uploadedFiles: [...uploadedFiles],
+      fileSummaries,
+    };
+
+    setRequestDrafts((prev) => {
+      const withoutCurrent = prev.filter((item) => item.id !== nextDraft.id);
+      const next = [nextDraft, ...withoutCurrent].slice(0, 12);
+      persistRequestDrafts(next);
+      return next;
+    });
+
+    setActiveDraftId(nextDraft.id);
+    setDraftListOpen(true);
+
+    if (!trimmedTitle && uploadedFiles.length === 0) {
+      return;
+    }
+  };
+
+  const loadDraft = (draft) => {
+    setNewRequest({
+      ...getEmptyRequestDraft(draft?.request?.category || newRequest.category),
+      ...(draft?.request || {}),
+    });
+    setUploadedFiles?.(Array.isArray(draft?.uploadedFiles) ? draft.uploadedFiles : []);
+    setActiveDraftId(draft?.id || null);
+    setDraftListOpen(false);
+  };
+
+  const deleteDraft = (draftId) => {
+    setRequestDrafts((prev) => {
+      const next = prev.filter((item) => item.id !== draftId);
+      persistRequestDrafts(next);
+      return next;
+    });
+
+    if (activeDraftId === draftId) setActiveDraftId(null);
+  };
 
   const askCreateRequest = () => {
     if (saving) return;
@@ -3304,9 +3591,12 @@ function CreateRequestPanel({
   };
 
   return (
-    <div className="min-h-0">
-      <div className="flex min-h-0 flex-col overflow-visible rounded-[30px] border border-white/70 bg-white/68 shadow-[0_18px_60px_rgba(0,0,0,0.06)] backdrop-blur-xl">
-        <div className="shrink-0 p-5 pb-3">
+    <div ref={panelRef} className="min-h-0 lg:sticky lg:top-5">
+      <div
+        style={panelHeight ? { height: `${panelHeight}px`, maxHeight: `${panelHeight}px` } : undefined}
+        className="flex min-h-0 flex-col overflow-hidden rounded-[30px] border border-white/70 bg-white/68 shadow-[0_18px_60px_rgba(0,0,0,0.06)] backdrop-blur-xl"
+      >
+        <div className="shrink-0 border-b border-black/5 p-5 pb-3">
           <div className="flex items-start justify-between gap-4">
             <div>
               <p className="text-xs font-medium uppercase tracking-[0.2em] text-neutral-400">Create</p>
@@ -3315,17 +3605,21 @@ function CreateRequestPanel({
 
             <button
               type="button"
-              onClick={askCreateRequest}
-              disabled={saving}
-              className="group grid h-12 w-12 place-items-center rounded-[20px] bg-neutral-950 text-white shadow-[0_14px_38px_rgba(0,0,0,0.18)] transition hover:-translate-y-0.5 hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-60 active:scale-95"
-              title="Create Request"
+              onClick={() => setDraftListOpen(true)}
+              className="group relative grid h-12 w-12 place-items-center rounded-[20px] bg-neutral-950 text-white shadow-[0_14px_38px_rgba(0,0,0,0.18)] transition hover:-translate-y-0.5 hover:bg-neutral-800 active:scale-95"
+              title="Open drafts"
             >
-              {saving ? <Loader2 size={20} className="animate-spin" /> : <Send size={20} />}
+              <ClipboardList size={20} />
+              {requestDrafts.length > 0 && (
+                <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-white px-1 text-[10px] font-bold text-neutral-950 shadow-sm">
+                  {requestDrafts.length}
+                </span>
+              )}
             </button>
           </div>
         </div>
 
-        <div className="space-y-3 px-5 pb-5">
+        <div className="request-scroll min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-5 py-4 pr-4" style={{ WebkitOverflowScrolling: "touch", scrollbarGutter: "stable" }}>
           <Field label="Category">
             <select value={newRequest.category} onChange={(e) => setNewRequest((prev) => ({ ...prev, category: e.target.value }))} className="field-input">
               {CATEGORY_FILTERS.filter((item) => item.id !== "all").map((category) => (
@@ -3423,12 +3717,35 @@ function CreateRequestPanel({
             </div>
           )}
 
-          <button type="button" onClick={askCreateRequest} disabled={saving} className="mt-2 flex w-full items-center justify-center gap-2 rounded-[22px] bg-neutral-950 px-5 py-4 text-sm font-semibold text-white shadow-[0_18px_45px_rgba(0,0,0,0.18)] transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-60 active:scale-[0.985]">
+        </div>
+
+        <div className="shrink-0 border-t border-black/5 bg-white/75 p-4 backdrop-blur-xl">
+          <button
+            type="button"
+            onClick={saveCurrentDraft}
+            disabled={saving}
+            className="mb-2 flex w-full items-center justify-center gap-2 rounded-[18px] border border-black/5 bg-white px-5 py-3 text-sm font-semibold text-neutral-700 shadow-sm transition hover:text-neutral-950 disabled:cursor-not-allowed disabled:opacity-60 active:scale-[0.985]"
+          >
+            <Save size={16} />
+            {activeDraftId ? "Update Draft" : "Save as Draft"}
+          </button>
+
+          <button type="button" onClick={askCreateRequest} disabled={saving} className="flex w-full items-center justify-center gap-2 rounded-[22px] bg-neutral-950 px-5 py-4 text-sm font-semibold text-white shadow-[0_18px_45px_rgba(0,0,0,0.18)] transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-60 active:scale-[0.985]">
             {saving ? <Loader2 size={17} className="animate-spin" /> : <Send size={17} />}
             {saving ? "Saving..." : "Create Request"}
           </button>
+          <p className="mt-2 text-center text-[11px] font-medium text-neutral-400">Drafts stay editable. Create Request stays ready.</p>
         </div>
       </div>
+
+      {draftListOpen && (
+        <RequestDraftsModal
+          drafts={requestDrafts}
+          onClose={() => setDraftListOpen(false)}
+          onLoad={loadDraft}
+          onDelete={deleteDraft}
+        />
+      )}
 
       {activeAnnotationItem && (
         <ImageAnnotationModal
@@ -3442,6 +3759,89 @@ function CreateRequestPanel({
         <SimpleConfirmModal title="Send this request?" message="Pastikan brief, deadline, attachment, dan notes sudah benar sebelum request dikirim." confirmLabel="Yes, send" icon="send" onCancel={() => setCreateConfirmOpen(false)} onConfirm={confirmCreateRequest} />
       )}
     </div>
+  );
+}
+
+function RequestDraftsModal({ drafts = [], onClose, onLoad, onDelete }) {
+  useEscapeClose(onClose);
+
+  return createPortal(
+    <div className="fixed inset-0 z-[999999] grid place-items-center bg-black/25 p-4 backdrop-blur-sm">
+      <div className="w-full max-w-xl rounded-[30px] border border-white/70 bg-[#f5f5f3]/95 p-5 shadow-[0_35px_120px_rgba(0,0,0,.22)]">
+        <div className="flex items-start justify-between gap-4 border-b border-black/5 pb-4">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-[0.2em] text-neutral-400">Drafts</p>
+            <h3 className="mt-1 text-2xl font-semibold tracking-[-0.05em]">Saved Request Drafts</h3>
+            <p className="mt-1 text-sm text-neutral-500">Load draft to continue editing before creating the request.</p>
+          </div>
+
+          <button type="button" onClick={onClose} className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-white text-neutral-400 shadow-sm hover:text-neutral-950">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="request-scroll mt-4 max-h-[60vh] space-y-3 overflow-y-auto pr-1">
+          {drafts.length === 0 ? (
+            <div className="rounded-[24px] border border-dashed border-black/10 bg-white/60 p-8 text-center">
+              <div className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-neutral-100 text-neutral-500">
+                <ClipboardList size={20} />
+              </div>
+              <p className="mt-3 text-sm font-semibold text-neutral-700">No draft yet</p>
+              <p className="mt-1 text-xs text-neutral-400">Click Save as Draft after filling a brief.</p>
+            </div>
+          ) : (
+            drafts.map((draft) => {
+              const request = draft.request || {};
+              const title = request.title?.trim() || "Untitled request draft";
+              const meta = [
+                request.requester,
+                request.type,
+                request.platform || "Internal",
+              ]
+                .filter(Boolean)
+                .join(" · ");
+
+              return (
+                <div key={draft.id} className="rounded-[24px] border border-black/5 bg-white/80 p-4 shadow-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-base font-semibold tracking-[-0.04em] text-neutral-950">{title}</p>
+                      <p className="mt-1 truncate text-xs font-medium text-neutral-500">{meta || "No requester / type yet"}</p>
+                      <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-neutral-400">
+                        <span>{formatCategoryLabel(request.category)}</span>
+                        <span>Priority: {request.priority || "Medium"}</span>
+                        {request.due && <span>Due: {formatDue(request.due)}</span>}
+                        <span>Saved: {formatDateTime(draft.savedAt)}</span>
+                      </div>
+                    </div>
+
+                    <div className="flex shrink-0 items-center gap-2">
+                      <button type="button" onClick={() => onLoad?.(draft)} className="rounded-full bg-neutral-950 px-4 py-2 text-xs font-semibold text-white hover:bg-neutral-800">
+                        Edit
+                      </button>
+                      <button type="button" onClick={() => onDelete?.(draft.id)} className="grid h-9 w-9 place-items-center rounded-full bg-red-50 text-red-500 hover:bg-red-100">
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+                  </div>
+
+                  {draft.fileSummaries?.length > 0 && (
+                    <div className="mt-3 rounded-2xl bg-neutral-50 px-3 py-2 text-xs text-neutral-500">
+                      {draft.fileSummaries.length} attachment{draft.fileSummaries.length > 1 ? "s" : ""} saved in this session
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        <div className="mt-4 rounded-2xl bg-white/70 px-4 py-3 text-center text-[11px] font-medium text-neutral-400">
+          Note: uploaded files stay editable in current session. After browser refresh, draft text is kept but files may need re-upload.
+        </div>
+      </div>
+    </div>,
+    document.body
   );
 }
 
