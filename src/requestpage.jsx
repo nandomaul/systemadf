@@ -1,12 +1,15 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   ArrowLeft,
+  Brush,
   CalendarDays,
   CheckCircle2,
   ChevronRight,
   ClipboardList,
+  Copy,
   Download,
+  Eraser,
   Eye,
   FileText,
   Folder,
@@ -19,11 +22,14 @@ import {
   Plus,
   Save,
   Search,
+  Square,
   Send,
   ShieldCheck,
   StickyNote,
   Trash2,
+  Type,
   UploadCloud,
+  Undo2,
   X,
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
@@ -334,6 +340,42 @@ function formatFileSize(bytes) {
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
 }
 
+
+function isImageFile(file) {
+  return String(file?.type || "").startsWith("image/");
+}
+
+function makeAnnotatedFileName(name) {
+  const cleanName = String(name || "annotated-image.png");
+  const withoutExt = cleanName.replace(/\.[^/.]+$/, "");
+  return `${withoutExt}-annotated.png`;
+}
+
+function getCanvasPoint(event, canvas) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+
+  return {
+    x: (event.clientX - rect.left) * scaleX,
+    y: (event.clientY - rect.top) * scaleY,
+  };
+}
+
+function useEscapeClose(onClose, enabled = true) {
+  useEffect(() => {
+    if (!enabled) return undefined;
+
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") onClose?.();
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose, enabled]);
+}
+
+
 function asFilesArray(files) {
   if (Array.isArray(files)) return files;
   return [];
@@ -348,6 +390,7 @@ function makeEmptySubLink() {
     id: makeId(),
     subfolder: "",
     link: "",
+    note: "",
   };
 }
 
@@ -372,8 +415,9 @@ function normalizeAssetGroups(value) {
           id: child?.id || makeId(),
           subfolder: String(child?.subfolder || child?.name || "").trim(),
           link: String(child?.link || child?.url || "").trim(),
+          note: String(child?.note || child?.feedback || "").trim(),
         }))
-        .filter((child) => child.subfolder || child.link);
+        .filter((child) => child.subfolder || child.link || child.note);
 
       normalized.push({
         id: item?.id || makeId(),
@@ -386,12 +430,14 @@ function normalizeAssetGroups(value) {
     const folderName = String(item?.folder || "").trim();
     const subfolder = String(item?.subfolder || "").trim();
     const link = String(item?.link || item?.url || "").trim();
+    const note = String(item?.note || item?.feedback || "").trim();
 
     const existing = normalized.find((group) => group.folder === folderName);
     const child = {
       id: makeId(),
       subfolder,
       link,
+      note,
     };
 
     if (existing) {
@@ -418,8 +464,9 @@ function cleanAssetGroups(groups) {
           id: child.id || makeId(),
           subfolder: String(child.subfolder || "").trim(),
           link: String(child.link || "").trim(),
+          note: String(child.note || child.feedback || "").trim(),
         }))
-        .filter((child) => child.subfolder || child.link),
+        .filter((child) => child.subfolder || child.link || child.note),
     }))
     .filter((group) => group.folder || group.children.length > 0);
 }
@@ -432,6 +479,7 @@ function flattenAssetLinks(value) {
         folder: group.folder,
         subfolder: child.subfolder,
         link: child.link,
+        note: child.note || "",
       }))
   );
 }
@@ -459,6 +507,7 @@ function getDisplayStatus(request) {
 function getDisplayStatusClass(request) {
   const status = getDisplayStatus(request);
   if (status === "Waiting for Accepted") return "bg-neutral-900 text-white border-neutral-900";
+  if (status === "Approved") return "bg-emerald-50 text-emerald-700 border-emerald-100";
   if (status === "Done") return "bg-emerald-50 text-emerald-700 border-emerald-100";
   if (status === "Read") return "bg-blue-50 text-blue-700 border-blue-100";
   if (status === "Revise") return "bg-amber-50 text-amber-700 border-amber-100";
@@ -469,7 +518,7 @@ function statusPayloadFromAction(action) {
   if (action === "accepted") {
     return {
       accepted: true,
-      status: "Edit",
+      status: "Approved",
       updated_at: new Date().toISOString(),
     };
   }
@@ -641,6 +690,7 @@ export default function RequestPage() {
 
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [statusConfirmTarget, setStatusConfirmTarget] = useState(null);
   const [requestTrashItems, setRequestTrashItems] = useState([]);
   const [requestTrashOpen, setRequestTrashOpen] = useState(false);
 
@@ -745,6 +795,78 @@ export default function RequestPage() {
       supabase.removeChannel(channel);
     };
   }, []);
+
+  useEffect(() => {
+    const handlePasteFiles = (event) => {
+      if (activeMenu !== "request") return;
+
+      const pastedFiles = Array.from(event.clipboardData?.files || []).filter((file) =>
+        String(file.type || "").startsWith("image/")
+      );
+
+      if (pastedFiles.length === 0) return;
+
+      event.preventDefault();
+      addUploadedFiles(pastedFiles);
+    };
+
+    window.addEventListener("paste", handlePasteFiles);
+    return () => window.removeEventListener("paste", handlePasteFiles);
+  }, [activeMenu, uploadedFiles.length]);
+
+
+  useEffect(() => {
+    const handleModalEscape = (event) => {
+      if (event.key !== "Escape") return;
+
+      if (requestTrashOpen) {
+        setRequestTrashOpen(false);
+        return;
+      }
+
+      if (bulkDeleteOpen) {
+        setBulkDeleteOpen(false);
+        return;
+      }
+
+      if (deleteTarget) {
+        setDeleteTarget(null);
+        return;
+      }
+
+      if (editRequest) {
+        setEditRequest(null);
+        setEditDraft(null);
+        setEditUploadedFiles([]);
+        return;
+      }
+
+      if (linkEditorRequest) {
+        setLinkEditorRequest(null);
+        return;
+      }
+
+      if (previewRequest) {
+        setPreviewRequest(null);
+        return;
+      }
+
+      if (assetModalRequest) {
+        setAssetModalRequest(null);
+      }
+    };
+
+    window.addEventListener("keydown", handleModalEscape);
+    return () => window.removeEventListener("keydown", handleModalEscape);
+  }, [
+    assetModalRequest,
+    previewRequest,
+    linkEditorRequest,
+    editRequest,
+    deleteTarget,
+    bulkDeleteOpen,
+    requestTrashOpen,
+  ]);
 
   const loadRequests = async () => {
     setLoading(true);
@@ -940,6 +1062,23 @@ export default function RequestPage() {
 
   const handleRemoveUploadedFile = (index) => {
     setUploadedFiles((prev) => prev.filter((_, itemIndex) => itemIndex !== index));
+  };
+
+  const handleReplaceUploadedFile = (index, nextFile) => {
+    if (!nextFile) return;
+
+    setUploadedFiles((prev) =>
+      prev.map((item, itemIndex) =>
+        itemIndex === index
+          ? {
+              ...item,
+              file: nextFile,
+              annotated: true,
+              note: item.note || "Annotated image attached.",
+            }
+          : item
+      )
+    );
   };
 
   const handleUploadedFileNoteChange = (index, note) => {
@@ -1697,6 +1836,23 @@ export default function RequestPage() {
     }
   };
 
+  const handleAskStatusAction = (requestId, action) => {
+    const targetRequest = requests.find((request) => request.id === requestId);
+    setStatusConfirmTarget({
+      requestId,
+      action,
+      request: targetRequest || null,
+    });
+  };
+
+  const handleConfirmStatusAction = async () => {
+    if (!statusConfirmTarget) return;
+
+    const { requestId, action } = statusConfirmTarget;
+    setStatusConfirmTarget(null);
+    await handleStatusAction(requestId, action);
+  };
+
   return (
     <div className="h-screen overflow-hidden bg-[#f5f5f3] text-neutral-950">
       <style>{`
@@ -1832,6 +1988,7 @@ export default function RequestPage() {
                   handleFileUpload={handleFileUpload}
                   handleFileDrop={handleFileDrop}
                   handleRemoveUploadedFile={handleRemoveUploadedFile}
+                  handleReplaceUploadedFile={handleReplaceUploadedFile}
                   handleUploadedFileNoteChange={handleUploadedFileNoteChange}
                   handleCreateRequest={handleCreateRequest}
                   createErrors={createErrors}
@@ -1859,7 +2016,7 @@ export default function RequestPage() {
                   toggleSelectAll={toggleSelectAll}
                   onBulkStatus={handleBulkStatus}
                   onBulkDelete={() => setBulkDeleteOpen(true)}
-                  onStatusAction={handleStatusAction}
+                  onStatusAction={handleAskStatusAction}
                   onSingleDelete={(request) => setDeleteTarget(request)}
                   onRefresh={loadRequests}
                   onEditLinks={handleOpenLinkEditor}
@@ -2026,6 +2183,21 @@ export default function RequestPage() {
             setEditRequest(null);
             setEditUploadedFiles([]);
           }}
+        />
+      )}
+
+      {statusConfirmTarget && (
+        <SimpleConfirmModal
+          title={statusConfirmTarget.action === "accepted" ? "Approve this request?" : `Change status to ${statusConfirmTarget.action}?`}
+          message={
+            statusConfirmTarget.action === "accepted"
+              ? `Request "${statusConfirmTarget.request?.title || "Untitled request"}" akan di-approve dan masuk workflow design.`
+              : `Status request "${statusConfirmTarget.request?.title || "Untitled request"}" akan diubah menjadi ${statusConfirmTarget.action}.`
+          }
+          confirmLabel={statusConfirmTarget.action === "accepted" ? "Yes, approve" : "Yes, update"}
+          icon="check"
+          onCancel={() => setStatusConfirmTarget(null)}
+          onConfirm={handleConfirmStatusAction}
         />
       )}
 
@@ -2682,6 +2854,7 @@ function RequestDesignPanel({
   handleFileUpload,
   handleFileDrop,
   handleRemoveUploadedFile,
+  handleReplaceUploadedFile,
   handleUploadedFileNoteChange,
   handleCreateRequest,
   createErrors,
@@ -2768,6 +2941,7 @@ function RequestDesignPanel({
         handleFileUpload={handleFileUpload}
         handleFileDrop={handleFileDrop}
         handleRemoveUploadedFile={handleRemoveUploadedFile}
+        handleReplaceUploadedFile={handleReplaceUploadedFile}
         handleUploadedFileNoteChange={handleUploadedFileNoteChange}
         handleCreateRequest={handleCreateRequest}
         createErrors={createErrors}
@@ -2951,12 +3125,7 @@ function RequestRow({
               <span>Due: {formatDue(request.due)}</span>
               <span>Created: {formatDateTime(request.created_at)}</span>
               {request.drive_link && (
-                <a
-                  href={request.drive_link}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="font-medium text-neutral-950 underline underline-offset-4"
-                >
+                <a href={request.drive_link} target="_blank" rel="noreferrer" className="font-medium text-neutral-950 underline underline-offset-4">
                   Drive link
                 </a>
               )}
@@ -2977,11 +3146,8 @@ function RequestRow({
           </div>
         </div>
 
-        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 xl:max-w-[520px]">
-          <button
-            onClick={() => onPreviewRequest?.(request)}
-            className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-xs font-semibold text-neutral-700 shadow-sm transition hover:text-neutral-950"
-          >
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 xl:max-w-[560px]">
+          <button onClick={() => onPreviewRequest?.(request)} className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-xs font-semibold text-neutral-700 shadow-sm transition hover:text-neutral-950">
             <Eye size={15} />
             View
           </button>
@@ -2989,11 +3155,7 @@ function RequestRow({
           <button
             onClick={() => onOpenAssets?.(request)}
             disabled={!hasAssets}
-            className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-semibold transition ${
-              hasAssets
-                ? "bg-neutral-950 text-white hover:bg-neutral-800"
-                : "cursor-not-allowed bg-neutral-200 text-neutral-400"
-            }`}
+            className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-semibold transition ${hasAssets ? "bg-neutral-950 text-white hover:bg-neutral-800" : "cursor-not-allowed bg-neutral-200 text-neutral-400"}`}
           >
             <Download size={15} />
             Download Asset
@@ -3003,11 +3165,7 @@ function RequestRow({
             <button
               onClick={() => onEditRequest?.(request)}
               disabled={tickets <= 0}
-              className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-semibold transition ${
-                tickets > 0
-                  ? "bg-white text-neutral-700 shadow-sm hover:text-neutral-950"
-                  : "cursor-not-allowed bg-neutral-100 text-neutral-300"
-              }`}
+              className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-semibold transition ${tickets > 0 ? "bg-white text-neutral-700 shadow-sm hover:text-neutral-950" : "cursor-not-allowed bg-neutral-100 text-neutral-300"}`}
             >
               <FileText size={15} />
               Edit Request
@@ -3017,18 +3175,20 @@ function RequestRow({
           {isAdmin && !manageMode && (
             <>
               <button
-                onClick={() => onEditAsset?.(request)}
-                className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-xs font-semibold text-neutral-700 shadow-sm hover:text-neutral-950"
+                onClick={() => !accepted && onStatusAction?.(request.id, "accepted")}
+                disabled={accepted}
+                className={`grid h-9 w-9 place-items-center rounded-full transition ${accepted ? "cursor-default bg-emerald-50 text-emerald-500" : "bg-emerald-50 text-emerald-600 hover:bg-emerald-100"}`}
+                title={accepted ? "Approved" : "Approve request"}
               >
+                <CheckCircle2 size={17} />
+              </button>
+
+              <button onClick={() => onEditAsset?.(request)} className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-xs font-semibold text-neutral-700 shadow-sm hover:text-neutral-950">
                 <Link2 size={15} />
                 Edit Asset
               </button>
 
-              <button
-                onClick={() => onSingleDelete?.(request)}
-                className="grid h-9 w-9 place-items-center rounded-full bg-red-50 text-red-600 transition hover:bg-red-100"
-                title="Delete request"
-              >
+              <button onClick={() => onSingleDelete?.(request)} className="grid h-9 w-9 place-items-center rounded-full bg-red-50 text-red-600 transition hover:bg-red-100" title="Delete request">
                 <Trash2 size={16} />
               </button>
             </>
@@ -3037,23 +3197,13 @@ function RequestRow({
           {isAdmin && manageMode && (
             <div className="flex flex-wrap items-center justify-end gap-2">
               {!accepted ? (
-                <button
-                  onClick={() => onStatusAction?.(request.id, "accepted")}
-                  className="rounded-full bg-neutral-950 px-4 py-2 text-xs font-semibold text-white hover:bg-neutral-800"
-                >
-                  Accepted
+                <button onClick={() => onStatusAction?.(request.id, "accepted")} className="inline-flex items-center gap-2 rounded-full bg-neutral-950 px-4 py-2 text-xs font-semibold text-white hover:bg-neutral-800">
+                  <CheckCircle2 size={15} />
+                  Approve
                 </button>
               ) : (
                 ["Edit", "Read", "Revise", "Done"].map((status) => (
-                  <button
-                    key={status}
-                    onClick={() => onStatusAction?.(request.id, status)}
-                    className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
-                      getDisplayStatus(request) === status
-                        ? "bg-neutral-950 text-white"
-                        : "bg-neutral-100 text-neutral-500 hover:bg-neutral-200"
-                    }`}
-                  >
+                  <button key={status} onClick={() => onStatusAction?.(request.id, status)} className={`rounded-full px-4 py-2 text-xs font-semibold transition ${getDisplayStatus(request) === status ? "bg-neutral-950 text-white" : "bg-neutral-100 text-neutral-500 hover:bg-neutral-200"}`}>
                     {status}
                   </button>
                 ))
@@ -3074,6 +3224,7 @@ function CreateRequestPanel({
   handleFileUpload,
   handleFileDrop,
   handleRemoveUploadedFile,
+  handleReplaceUploadedFile,
   handleUploadedFileNoteChange,
   handleCreateRequest,
   createErrors = {},
@@ -3081,117 +3232,85 @@ function CreateRequestPanel({
 }) {
   const tomorrowKey = getTomorrowKey();
   const [dragActive, setDragActive] = useState(false);
+  const [createConfirmOpen, setCreateConfirmOpen] = useState(false);
+  const [annotateIndex, setAnnotateIndex] = useState(null);
+
+  const activeAnnotationItem =
+    annotateIndex === null || annotateIndex < 0 ? null : uploadedFiles[annotateIndex];
+
+  const askCreateRequest = () => {
+    if (saving) return;
+    setCreateConfirmOpen(true);
+  };
+
+  const confirmCreateRequest = () => {
+    setCreateConfirmOpen(false);
+    handleCreateRequest();
+  };
+
+  const handleSaveAnnotation = (nextFile) => {
+    if (annotateIndex === null || annotateIndex < 0) return;
+
+    handleReplaceUploadedFile?.(annotateIndex, nextFile);
+    setAnnotateIndex(null);
+  };
 
   return (
-    <div className="lg:sticky lg:top-0 lg:h-[calc(100vh-238px)] min-h-0 overflow-hidden">
-      <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-[30px] border border-white/70 bg-white/68 shadow-[0_18px_60px_rgba(0,0,0,0.06)] backdrop-blur-xl">
+    <div className="min-h-0">
+      <div className="flex min-h-0 flex-col overflow-visible rounded-[30px] border border-white/70 bg-white/68 shadow-[0_18px_60px_rgba(0,0,0,0.06)] backdrop-blur-xl">
         <div className="shrink-0 p-5 pb-3">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <p className="text-xs font-medium uppercase tracking-[0.2em] text-neutral-400">
-                Create
-              </p>
-              <h3 className="mt-1 text-2xl font-semibold tracking-[-0.05em]">
-                New Request
-              </h3>
+              <p className="text-xs font-medium uppercase tracking-[0.2em] text-neutral-400">Create</p>
+              <h3 className="mt-1 text-2xl font-semibold tracking-[-0.05em]">New Request</h3>
             </div>
 
-            <div className="grid h-11 w-11 place-items-center rounded-2xl bg-neutral-950 text-white">
-              <Plus size={20} />
-            </div>
+            <button
+              type="button"
+              onClick={askCreateRequest}
+              disabled={saving}
+              className="group grid h-12 w-12 place-items-center rounded-[20px] bg-neutral-950 text-white shadow-[0_14px_38px_rgba(0,0,0,0.18)] transition hover:-translate-y-0.5 hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-60 active:scale-95"
+              title="Create Request"
+            >
+              {saving ? <Loader2 size={20} className="animate-spin" /> : <Send size={20} />}
+            </button>
           </div>
         </div>
 
-        <div className="request-scroll min-h-0 flex-1 space-y-3 overflow-y-auto px-5 pb-5">
+        <div className="space-y-3 px-5 pb-5">
           <Field label="Category">
-            <select
-              value={newRequest.category}
-              onChange={(e) => setNewRequest((prev) => ({ ...prev, category: e.target.value }))}
-              className="field-input"
-            >
+            <select value={newRequest.category} onChange={(e) => setNewRequest((prev) => ({ ...prev, category: e.target.value }))} className="field-input">
               {CATEGORY_FILTERS.filter((item) => item.id !== "all").map((category) => (
-                <option key={category.id} value={category.id}>
-                  {category.label}
-                </option>
+                <option key={category.id} value={category.id}>{category.label}</option>
               ))}
             </select>
           </Field>
 
           <Field label="Requester" error={createErrors.requester}>
-            <input
-              value={newRequest.requester}
-              onChange={(e) => {
-                setNewRequest((prev) => ({ ...prev, requester: e.target.value }));
-                clearCreateError("requester");
-              }}
-              placeholder="Requester name"
-              className={getInputClass(createErrors.requester)}
-            />
+            <input value={newRequest.requester} onChange={(e) => { setNewRequest((prev) => ({ ...prev, requester: e.target.value })); clearCreateError("requester"); }} placeholder="Requester name" className={getInputClass(createErrors.requester)} />
           </Field>
 
           <Field label="Request Title" error={createErrors.title}>
-            <input
-              value={newRequest.title}
-              onChange={(e) => {
-                setNewRequest((prev) => ({ ...prev, title: e.target.value }));
-                clearCreateError("title");
-              }}
-              placeholder="Example: P4 LP Price Reveal"
-              className={getInputClass(createErrors.title)}
-            />
+            <input value={newRequest.title} onChange={(e) => { setNewRequest((prev) => ({ ...prev, title: e.target.value })); clearCreateError("title"); }} placeholder="Example: P4 LP Price Reveal" className={getInputClass(createErrors.title)} />
           </Field>
 
           <Field label="Request Type" error={createErrors.type}>
-            <input
-              value={newRequest.type}
-              onChange={(e) => {
-                setNewRequest((prev) => ({ ...prev, type: e.target.value }));
-                clearCreateError("type");
-              }}
-              placeholder="Banner, LP, SKU..."
-              list="request-type-suggestions"
-              className={getInputClass(createErrors.type)}
-            />
-            <datalist id="request-type-suggestions">
-              {REQUEST_TYPE_SUGGESTIONS.map((item) => (
-                <option key={item} value={item} />
-              ))}
-            </datalist>
+            <input value={newRequest.type} onChange={(e) => { setNewRequest((prev) => ({ ...prev, type: e.target.value })); clearCreateError("type"); }} placeholder="Banner, LP, SKU..." list="request-type-suggestions" className={getInputClass(createErrors.type)} />
+            <datalist id="request-type-suggestions">{REQUEST_TYPE_SUGGESTIONS.map((item) => (<option key={item} value={item} />))}</datalist>
           </Field>
 
           <div className="grid grid-cols-2 gap-3">
             <Field label="Platform">
-              <input
-                value={newRequest.platform}
-                onChange={(e) => setNewRequest((prev) => ({ ...prev, platform: e.target.value }))}
-                placeholder="TikTok / Internal"
-                className="field-input"
-              />
+              <input value={newRequest.platform} onChange={(e) => setNewRequest((prev) => ({ ...prev, platform: e.target.value }))} placeholder="TikTok / Internal" className="field-input" />
             </Field>
-
             <Field label="Due Date" error={createErrors.due}>
-              <input
-                type="date"
-                min={tomorrowKey}
-                value={newRequest.due || ""}
-                onChange={(e) => {
-                  setNewRequest((prev) => ({ ...prev, due: e.target.value }));
-                  clearCreateError("due");
-                }}
-                className={`${getInputClass(createErrors.due)} date-input`}
-              />
-              <p className="mt-1 text-[11px] text-neutral-400">
-                Today is locked. Choose tomorrow or later.
-              </p>
+              <input type="date" min={tomorrowKey} value={newRequest.due || ""} onChange={(e) => { setNewRequest((prev) => ({ ...prev, due: e.target.value })); clearCreateError("due"); }} className={`${getInputClass(createErrors.due)} date-input`} />
+              <p className="mt-1 text-[11px] text-neutral-400">Today is locked. Choose tomorrow or later.</p>
             </Field>
           </div>
 
           <Field label="Priority">
-            <select
-              value={newRequest.priority}
-              onChange={(e) => setNewRequest((prev) => ({ ...prev, priority: e.target.value }))}
-              className="field-input"
-            >
+            <select value={newRequest.priority} onChange={(e) => setNewRequest((prev) => ({ ...prev, priority: e.target.value }))} className="field-input">
               <option>Low</option>
               <option>Medium</option>
               <option>High</option>
@@ -3199,128 +3318,360 @@ function CreateRequestPanel({
           </Field>
 
           <Field label="Drive Link">
-            <input
-              value={newRequest.drive_link}
-              onChange={(e) => setNewRequest((prev) => ({ ...prev, drive_link: e.target.value }))}
-              placeholder="Optional Google Drive link"
-              className="field-input"
-            />
+            <input value={newRequest.drive_link} onChange={(e) => setNewRequest((prev) => ({ ...prev, drive_link: e.target.value }))} placeholder="Optional Google Drive link" className="field-input" />
           </Field>
 
           <Field label="Notes">
-            <textarea
-              value={newRequest.note}
-              onChange={(e) => setNewRequest((prev) => ({ ...prev, note: e.target.value }))}
-              placeholder="Write brief notes..."
-              rows={4}
-              className="field-input resize-none"
-            />
+            <textarea value={newRequest.note} onChange={(e) => setNewRequest((prev) => ({ ...prev, note: e.target.value }))} placeholder="Write brief notes..." rows={4} className="field-input resize-none" />
           </Field>
 
           <label
-            onDragEnter={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              if (uploadedFiles.length < MAX_ATTACHMENTS) setDragActive(true);
-            }}
-            onDragOver={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              if (uploadedFiles.length < MAX_ATTACHMENTS) setDragActive(true);
-            }}
-            onDragLeave={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              setDragActive(false);
-            }}
-            onDrop={(event) => {
-              setDragActive(false);
-              if (uploadedFiles.length >= MAX_ATTACHMENTS) {
-                event.preventDefault();
-                event.stopPropagation();
-                return;
-              }
-              handleFileDrop(event);
-            }}
-            className={`block rounded-[24px] border border-dashed p-4 text-center transition ${
-              uploadedFiles.length >= MAX_ATTACHMENTS
-                ? "cursor-not-allowed border-black/10 bg-white/50 opacity-55"
-                : dragActive
-                  ? "cursor-copy border-neutral-950 bg-white shadow-[0_18px_45px_rgba(0,0,0,0.08)]"
-                  : "cursor-pointer border-black/10 bg-white/70 hover:bg-white"
-            }`}
+            onDragEnter={(event) => { event.preventDefault(); event.stopPropagation(); if (uploadedFiles.length < MAX_ATTACHMENTS) setDragActive(true); }}
+            onDragOver={(event) => { event.preventDefault(); event.stopPropagation(); if (uploadedFiles.length < MAX_ATTACHMENTS) setDragActive(true); }}
+            onDragLeave={(event) => { event.preventDefault(); event.stopPropagation(); setDragActive(false); }}
+            onDrop={(event) => { setDragActive(false); if (uploadedFiles.length >= MAX_ATTACHMENTS) { event.preventDefault(); event.stopPropagation(); return; } handleFileDrop(event); }}
+            className={`block rounded-[24px] border border-dashed p-4 text-center transition ${uploadedFiles.length >= MAX_ATTACHMENTS ? "cursor-not-allowed border-black/10 bg-white/50 opacity-55" : dragActive ? "cursor-copy border-neutral-950 bg-white shadow-[0_18px_45px_rgba(0,0,0,0.08)]" : "cursor-pointer border-black/10 bg-white/70 hover:bg-white"}`}
           >
             <UploadCloud className="mx-auto text-neutral-400" size={24} />
-            <p className="mt-2 text-sm font-medium">
-              {dragActive ? "Drop files here" : "Upload attachment"}
-            </p>
-            <p className="mt-1 text-xs text-neutral-400">
-              Drag from Mac / Windows folder, or click to browse.
-            </p>
-            <p className="mt-1 text-xs text-neutral-400">
-              PDF, JPG, PNG · max {MAX_ATTACHMENTS} attachments · max {MAX_FILE_SIZE_MB}MB each
-            </p>
-            <p className="mt-1 text-[11px] font-medium text-neutral-400">
-              {uploadedFiles.length}/{MAX_ATTACHMENTS} attachments selected
-            </p>
-            <input
-              type="file"
-              className="hidden"
-              multiple
-              disabled={uploadedFiles.length >= MAX_ATTACHMENTS}
-              accept=".pdf,.jpg,.jpeg,.png"
-              onChange={handleFileUpload}
-            />
+            <p className="mt-2 text-sm font-medium">{dragActive ? "Drop files here" : "Upload attachment"}</p>
+            <p className="mt-1 text-xs text-neutral-400">Drag file, click to browse, or paste image with Cmd/Ctrl + V.</p>
+            <p className="mt-1 text-xs text-neutral-400">PDF, JPG, PNG · max {MAX_ATTACHMENTS} attachments · max {MAX_FILE_SIZE_MB}MB each</p>
+            <p className="mt-1 text-[11px] font-medium text-neutral-400">{uploadedFiles.length}/{MAX_ATTACHMENTS} attachments selected</p>
+            <input type="file" className="hidden" multiple disabled={uploadedFiles.length >= MAX_ATTACHMENTS} accept=".pdf,.jpg,.jpeg,.png" onChange={handleFileUpload} />
           </label>
 
           {uploadedFiles.length > 0 && (
             <div className="space-y-2">
               {uploadedFiles.map((fileItem, index) => {
                 const file = fileItem.file || fileItem;
+                const canAnnotate = isImageFile(file);
 
                 return (
-                  <div
-                    key={`${fileItem.id || file.name}-${index}`}
-                    className="rounded-2xl bg-neutral-100 p-3 text-sm"
-                  >
+                  <div key={`${fileItem.id || file.name}-${index}`} className="rounded-2xl bg-neutral-100 p-3 text-sm">
                     <div className="flex items-center justify-between gap-3">
                       <span className="min-w-0 truncate text-neutral-600">
                         Attachment {index + 1} · {formatFileSize(file.size)}
+                        {fileItem.annotated ? <span className="ml-2 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">Annotated</span> : null}
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveUploadedFile(index)}
-                        className="shrink-0 text-neutral-400 transition hover:text-red-500"
-                      >
-                        <X size={16} />
-                      </button>
+                      <div className="flex shrink-0 items-center gap-2">
+                        {canAnnotate && (
+                          <button
+                            type="button"
+                            onClick={() => setAnnotateIndex(index)}
+                            className="inline-flex items-center gap-1 rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-neutral-600 shadow-sm transition hover:text-neutral-950"
+                            title="Draw / add notes on image"
+                          >
+                            <Brush size={13} />
+                            Annotate
+                          </button>
+                        )}
+                        <button type="button" onClick={() => handleRemoveUploadedFile(index)} className="text-neutral-400 transition hover:text-red-500"><X size={16} /></button>
+                      </div>
                     </div>
-
-                    <textarea
-                      value={fileItem.note || ""}
-                      onChange={(event) => handleUploadedFileNoteChange(index, event.target.value)}
-                      placeholder="Attachment note, example: Kotak biru FIRST SALE..."
-                      rows={2}
-                      className="mt-2 w-full resize-none rounded-2xl border border-black/5 bg-white/82 px-3 py-2 text-xs text-neutral-600 outline-none placeholder:text-neutral-400 focus:bg-white"
-                    />
+                    <textarea value={fileItem.note || ""} onChange={(event) => handleUploadedFileNoteChange(index, event.target.value)} placeholder="Attachment note, example: tandai bagian logo / ubah copy / revisi warna..." rows={2} className="mt-2 w-full resize-none rounded-2xl border border-black/5 bg-white/82 px-3 py-2 text-xs text-neutral-600 outline-none placeholder:text-neutral-400 focus:bg-white" />
                   </div>
                 );
               })}
             </div>
           )}
 
-          <button
-            type="button"
-            onClick={handleCreateRequest}
-            disabled={saving}
-            className="mt-2 flex w-full items-center justify-center gap-2 rounded-[22px] bg-neutral-950 px-5 py-4 text-sm font-semibold text-white shadow-[0_18px_45px_rgba(0,0,0,0.18)] transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-60 active:scale-[0.985]"
-          >
+          <button type="button" onClick={askCreateRequest} disabled={saving} className="mt-2 flex w-full items-center justify-center gap-2 rounded-[22px] bg-neutral-950 px-5 py-4 text-sm font-semibold text-white shadow-[0_18px_45px_rgba(0,0,0,0.18)] transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-60 active:scale-[0.985]">
             {saving ? <Loader2 size={17} className="animate-spin" /> : <Send size={17} />}
             {saving ? "Saving..." : "Create Request"}
           </button>
         </div>
       </div>
+
+      {activeAnnotationItem && (
+        <ImageAnnotationModal
+          fileItem={activeAnnotationItem}
+          onClose={() => setAnnotateIndex(null)}
+          onSave={handleSaveAnnotation}
+        />
+      )}
+
+      {createConfirmOpen && (
+        <SimpleConfirmModal title="Send this request?" message="Pastikan brief, deadline, attachment, dan notes sudah benar sebelum request dikirim." confirmLabel="Yes, send" icon="send" onCancel={() => setCreateConfirmOpen(false)} onConfirm={confirmCreateRequest} />
+      )}
     </div>
+  );
+}
+
+function ImageAnnotationModal({ fileItem, onClose, onSave }) {
+  useEscapeClose(onClose);
+
+  const file = fileItem?.file || fileItem;
+  const canvasRef = useRef(null);
+  const imageRef = useRef(null);
+  const drawingRef = useRef(false);
+  const startPointRef = useRef(null);
+  const snapshotRef = useRef(null);
+
+  const [tool, setTool] = useState("brush");
+  const [strokeColor, setStrokeColor] = useState("#ff2d2d");
+  const [strokeSize, setStrokeSize] = useState(5);
+  const [textValue, setTextValue] = useState("Note");
+  const [history, setHistory] = useState([]);
+  const [ready, setReady] = useState(false);
+  const [localError, setLocalError] = useState("");
+
+  const pushHistory = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const dataUrl = canvas.toDataURL("image/png");
+    setHistory((prev) => [...prev.slice(-14), dataUrl]);
+  };
+
+  const redrawSnapshot = (snapshotUrl) => {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context || !snapshotUrl) return;
+
+    const image = new Image();
+    image.onload = () => {
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0);
+    };
+    image.src = snapshotUrl;
+  };
+
+  useEffect(() => {
+    if (!file || !canvasRef.current) return undefined;
+
+    const objectUrl = URL.createObjectURL(file);
+    const image = new Image();
+
+    image.onload = () => {
+      const canvas = canvasRef.current;
+      const context = canvas?.getContext("2d");
+      if (!canvas || !context) return;
+
+      canvas.width = image.naturalWidth || image.width;
+      canvas.height = image.naturalHeight || image.height;
+
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+      imageRef.current = image;
+      setReady(true);
+
+      window.setTimeout(pushHistory, 0);
+    };
+
+    image.onerror = () => {
+      setLocalError("Gambar gagal dibuka. Coba upload JPG/PNG lain.");
+    };
+
+    image.src = objectUrl;
+
+    return () => {
+      URL.revokeObjectURL(objectUrl);
+    };
+  }, [file]);
+
+  const handlePointerDown = (event) => {
+    if (!ready) return;
+
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context) return;
+
+    const point = getCanvasPoint(event, canvas);
+
+    if (tool === "text") {
+      const value = String(textValue || "").trim();
+      if (!value) return;
+
+      context.save();
+      context.fillStyle = strokeColor;
+      context.font = `700 ${Math.max(18, strokeSize * 5)}px Inter, Arial, sans-serif`;
+      context.lineWidth = 4;
+      context.strokeStyle = "rgba(255,255,255,.86)";
+      context.strokeText(value, point.x, point.y);
+      context.fillText(value, point.x, point.y);
+      context.restore();
+      pushHistory();
+      return;
+    }
+
+    drawingRef.current = true;
+    startPointRef.current = point;
+    snapshotRef.current = canvas.toDataURL("image/png");
+
+    if (tool === "brush" || tool === "eraser") {
+      context.save();
+      context.lineCap = "round";
+      context.lineJoin = "round";
+      context.lineWidth = strokeSize;
+      context.strokeStyle = tool === "eraser" ? "#ffffff" : strokeColor;
+      context.globalCompositeOperation = tool === "eraser" ? "destination-out" : "source-over";
+      context.beginPath();
+      context.moveTo(point.x, point.y);
+      context.restore();
+    }
+  };
+
+  const handlePointerMove = (event) => {
+    if (!drawingRef.current || !ready) return;
+
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context) return;
+
+    const point = getCanvasPoint(event, canvas);
+
+    if (tool === "brush" || tool === "eraser") {
+      context.save();
+      context.lineCap = "round";
+      context.lineJoin = "round";
+      context.lineWidth = strokeSize;
+      context.strokeStyle = tool === "eraser" ? "#ffffff" : strokeColor;
+      context.globalCompositeOperation = tool === "eraser" ? "destination-out" : "source-over";
+      context.lineTo(point.x, point.y);
+      context.stroke();
+      context.restore();
+      return;
+    }
+
+    if (tool === "box") {
+      redrawSnapshot(snapshotRef.current);
+
+      const start = startPointRef.current;
+      window.requestAnimationFrame(() => {
+        const liveContext = canvas.getContext("2d");
+        if (!liveContext || !start) return;
+
+        liveContext.save();
+        liveContext.strokeStyle = strokeColor;
+        liveContext.lineWidth = strokeSize;
+        liveContext.setLineDash([14, 8]);
+        liveContext.strokeRect(start.x, start.y, point.x - start.x, point.y - start.y);
+        liveContext.restore();
+      });
+    }
+  };
+
+  const handlePointerUp = () => {
+    if (!drawingRef.current) return;
+
+    drawingRef.current = false;
+    startPointRef.current = null;
+    snapshotRef.current = null;
+    pushHistory();
+  };
+
+  const handleUndo = () => {
+    setHistory((prev) => {
+      if (prev.length <= 1) return prev;
+
+      const next = prev.slice(0, -1);
+      redrawSnapshot(next[next.length - 1]);
+      return next;
+    });
+  };
+
+  const handleClear = () => {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    const image = imageRef.current;
+
+    if (!canvas || !context || !image) return;
+
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    pushHistory();
+  };
+
+  const handleSave = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        setLocalError("Gagal save annotation. Coba ulang.");
+        return;
+      }
+
+      const annotatedFile = new File([blob], makeAnnotatedFileName(file?.name), {
+        type: "image/png",
+        lastModified: Date.now(),
+      });
+
+      onSave?.(annotatedFile);
+    }, "image/png", 0.92);
+  };
+
+  const toolButtonClass = (id) =>
+    `inline-flex items-center gap-2 rounded-2xl px-3 py-2 text-xs font-semibold transition ${
+      tool === id
+        ? "bg-neutral-950 text-white"
+        : "bg-white text-neutral-600 shadow-sm hover:text-neutral-950"
+    }`;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[999999] grid place-items-center bg-black/35 p-4 backdrop-blur-sm">
+      <div className="flex max-h-[calc(100vh-2rem)] w-full max-w-6xl flex-col overflow-hidden rounded-[32px] border border-white/70 bg-[#f5f5f3]/96 shadow-[0_35px_120px_rgba(0,0,0,.28)]">
+        <div className="shrink-0 border-b border-black/5 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-medium uppercase tracking-[0.2em] text-neutral-400">Image Annotation</p>
+              <h3 className="mt-1 text-2xl font-semibold tracking-[-0.05em]">Mark request image</h3>
+              <p className="mt-1 text-sm text-neutral-500">Brush, box, text note, undo, then save back to attachment.</p>
+            </div>
+
+            <button onClick={onClose} className="grid h-10 w-10 place-items-center rounded-full bg-white text-neutral-500 shadow-sm hover:text-neutral-950">
+              <X size={18} />
+            </button>
+          </div>
+
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <button type="button" onClick={() => setTool("brush")} className={toolButtonClass("brush")}><Brush size={15} /> Brush</button>
+            <button type="button" onClick={() => setTool("box")} className={toolButtonClass("box")}><Square size={15} /> Box</button>
+            <button type="button" onClick={() => setTool("text")} className={toolButtonClass("text")}><Type size={15} /> Text</button>
+            <button type="button" onClick={() => setTool("eraser")} className={toolButtonClass("eraser")}><Eraser size={15} /> Eraser</button>
+
+            <input value={strokeColor} onChange={(event) => setStrokeColor(event.target.value)} type="color" className="h-10 w-12 cursor-pointer rounded-2xl border border-black/5 bg-white p-1 shadow-sm" title="Color" />
+            <input value={strokeSize} onChange={(event) => setStrokeSize(Number(event.target.value))} type="range" min="2" max="18" className="w-28 accent-black" title="Brush size" />
+
+            <input
+              value={textValue}
+              onChange={(event) => setTextValue(event.target.value)}
+              placeholder="Text note..."
+              className="min-w-[180px] rounded-2xl border border-black/5 bg-white px-3 py-2 text-xs font-medium text-neutral-700 outline-none placeholder:text-neutral-400"
+            />
+
+            <button type="button" onClick={handleUndo} className="inline-flex items-center gap-2 rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-neutral-600 shadow-sm hover:text-neutral-950"><Undo2 size={15} /> Undo</button>
+            <button type="button" onClick={handleClear} className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-neutral-600 shadow-sm hover:text-neutral-950">Reset</button>
+          </div>
+        </div>
+
+        <div className="request-scroll min-h-0 flex-1 overflow-auto p-4">
+          {localError ? <p className="mb-3 rounded-2xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-600">{localError}</p> : null}
+          <div className="rounded-[28px] bg-white/82 p-3 shadow-sm">
+            <canvas
+              ref={canvasRef}
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              onPointerLeave={handlePointerUp}
+              className="mx-auto block max-h-[60vh] max-w-full touch-none rounded-[22px] bg-neutral-100 shadow-sm"
+            />
+          </div>
+        </div>
+
+        <div className="shrink-0 border-t border-black/5 p-4">
+          <div className="flex justify-end gap-3">
+            <button type="button" onClick={onClose} className="rounded-2xl bg-white px-5 py-3 text-sm font-semibold text-neutral-600 shadow-sm hover:text-neutral-950">Cancel</button>
+            <button type="button" onClick={handleSave} className="inline-flex items-center gap-2 rounded-2xl bg-neutral-950 px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-neutral-800">
+              <Save size={16} />
+              Save Annotation
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body
   );
 }
 
@@ -3740,8 +4091,10 @@ function RequestEditModal({
 }
 
 function RequestPreviewModal({ request, onClose }) {
+  useEscapeClose(onClose);
   const [signedFiles, setSignedFiles] = useState([]);
   const [activeAttachment, setActiveAttachment] = useState(null);
+  const [copiedAssetLink, setCopiedAssetLink] = useState("");
   const files = asFilesArray(request.files);
   const assetLinks = flattenAssetLinks(request.asset_links);
 
@@ -3773,6 +4126,17 @@ function RequestPreviewModal({ request, onClose }) {
       active = false;
     };
   }, [request.id]);
+
+  const handleCopyPreviewAssetLink = async (link) => {
+    if (!link) return;
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopiedAssetLink(link);
+      window.setTimeout(() => setCopiedAssetLink(""), 1400);
+    } catch {
+      // copy fallback: user can still open link
+    }
+  };
 
   return createPortal(
     <div className="fixed inset-0 z-[999999] flex items-center justify-center bg-black/30 p-4 backdrop-blur-sm">
@@ -3987,15 +4351,20 @@ function RequestPreviewModal({ request, onClose }) {
                 ) : (
                   <div className="mt-4 space-y-2">
                     {assetLinks.map((asset, index) => (
-                      <a
-                        key={`${asset.link}-${index}`}
-                        href={asset.link}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="block rounded-2xl bg-neutral-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-neutral-800"
-                      >
-                        {asset.folder || "Asset"} · {asset.subfolder || `Link ${index + 1}`}
-                      </a>
+                      <div key={`${asset.link}-${index}`} className="rounded-2xl bg-neutral-950 p-3 text-white">
+                        <p className="text-sm font-semibold">{asset.folder || "Asset"} · {asset.subfolder || `Link ${index + 1}`}</p>
+                        {asset.note && <p className="mt-1 whitespace-pre-wrap text-xs leading-5 text-white/65">{asset.note}</p>}
+                        <div className="mt-3 flex gap-2">
+                          <button type="button" onClick={() => handleCopyPreviewAssetLink(asset.link)} className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-2 text-xs font-semibold text-white hover:bg-white/15">
+                            <Copy size={14} />
+                            {copiedAssetLink === asset.link ? "Copied" : "Copy"}
+                          </button>
+                          <a href={asset.link} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-2 text-xs font-semibold text-neutral-950 hover:bg-neutral-100">
+                            <Download size={14} />
+                            Open
+                          </a>
+                        </div>
+                      </div>
                     ))}
                   </div>
                 )}
@@ -4086,8 +4455,10 @@ function AttachmentLightbox({ file, onClose }) {
 
 
 function AssetDownloadModal({ request, onClose }) {
+  useEscapeClose(onClose);
   const [checked, setChecked] = useState(false);
   const [localError, setLocalError] = useState("");
+  const [copiedLink, setCopiedLink] = useState("");
 
   const groups = normalizeAssetGroups(request.asset_links)
     .map((group) => ({
@@ -4103,8 +4474,18 @@ function AssetDownloadModal({ request, onClose }) {
       setLocalError("Centang checklist dulu sebelum buka asset.");
       return;
     }
-
     setLocalError("");
+  };
+
+  const handleCopyAssetLink = async (link) => {
+    if (!link) return;
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopiedLink(link);
+      window.setTimeout(() => setCopiedLink(""), 1400);
+    } catch {
+      setLocalError("Copy link gagal. Buka link lalu copy manual ya.");
+    }
   };
 
   if (!checked) {
@@ -4115,72 +4496,25 @@ function AssetDownloadModal({ request, onClose }) {
             <div>
               <p className="text-xs font-medium uppercase tracking-[0.2em] text-neutral-400">Asset Check</p>
               <h3 className="mt-1 text-2xl font-semibold tracking-[-0.05em]">{request.title}</h3>
-              <p className="mt-1 text-sm text-neutral-500">
-                Cek dulu detail request sebelum buka link asset.
-              </p>
+              <p className="mt-1 text-sm text-neutral-500">Cek dulu detail request sebelum buka link asset.</p>
             </div>
-
-            <button
-              onClick={onClose}
-              className="grid h-10 w-10 place-items-center rounded-full bg-white text-neutral-500 shadow-sm hover:text-neutral-950"
-            >
-              <X size={18} />
-            </button>
+            <button onClick={onClose} className="grid h-10 w-10 place-items-center rounded-full bg-white text-neutral-500 shadow-sm hover:text-neutral-950"><X size={18} /></button>
           </div>
 
           <div className="mt-5 space-y-3">
-            {[
-              "Pastikan requester, type, platform, dan notes sudah sesuai.",
-              "Pastikan asset yang dibuka sesuai folder/sub folder.",
-              "Cek harga, periode promo, dan placement sebelum dipakai.",
-            ].map((item) => (
-              <div key={item} className="flex gap-3 rounded-[22px] bg-white/78 p-4 shadow-sm">
-                <CheckCircle2 size={18} className="mt-0.5 shrink-0 text-neutral-400" />
-                <p className="text-sm leading-5 text-neutral-600">{item}</p>
-              </div>
+            {["Pastikan requester, type, platform, dan notes sudah sesuai.", "Pastikan asset yang dibuka sesuai folder/sub folder.", "Cek harga, periode promo, dan placement sebelum dipakai."].map((item) => (
+              <div key={item} className="flex gap-3 rounded-[22px] bg-white/78 p-4 shadow-sm"><CheckCircle2 size={18} className="mt-0.5 shrink-0 text-neutral-400" /><p className="text-sm leading-5 text-neutral-600">{item}</p></div>
             ))}
-
             <label className="flex cursor-pointer items-center gap-3 rounded-[22px] border border-black/5 bg-white/90 p-4 shadow-sm">
-              <input
-                type="checkbox"
-                checked={checked}
-                onChange={(e) => {
-                  setChecked(e.target.checked);
-                  setLocalError("");
-                }}
-                className="h-4 w-4 accent-black"
-              />
-              <span className="text-sm font-semibold text-neutral-700">
-                Sudah dicek, tampilkan {totalLinks} asset link.
-              </span>
+              <input type="checkbox" checked={checked} onChange={(e) => { setChecked(e.target.checked); setLocalError(""); }} className="h-4 w-4 accent-black" />
+              <span className="text-sm font-semibold text-neutral-700">Sudah dicek, tampilkan {totalLinks} asset link.</span>
             </label>
-
-            {localError && (
-              <p className="rounded-2xl bg-red-50 px-4 py-3 text-center text-xs font-medium text-red-600">
-                {localError}
-              </p>
-            )}
+            {localError && <p className="rounded-2xl bg-red-50 px-4 py-3 text-center text-xs font-medium text-red-600">{localError}</p>}
           </div>
 
           <div className="mt-6 grid grid-cols-2 gap-3">
-            <button
-              onClick={onClose}
-              className="rounded-2xl bg-white px-5 py-3 text-sm font-semibold text-neutral-600 shadow-sm hover:text-neutral-950"
-            >
-              Cancel
-            </button>
-
-            <button
-              onClick={handleShowAssets}
-              disabled={!checked}
-              className={`rounded-2xl px-5 py-3 text-sm font-semibold text-white shadow-sm transition ${
-                checked
-                  ? "bg-neutral-950 hover:bg-neutral-800"
-                  : "cursor-not-allowed bg-neutral-300"
-              }`}
-            >
-              Continue
-            </button>
+            <button onClick={onClose} className="rounded-2xl bg-white px-5 py-3 text-sm font-semibold text-neutral-600 shadow-sm hover:text-neutral-950">Cancel</button>
+            <button onClick={handleShowAssets} disabled={!checked} className={`rounded-2xl px-5 py-3 text-sm font-semibold text-white shadow-sm transition ${checked ? "bg-neutral-950 hover:bg-neutral-800" : "cursor-not-allowed bg-neutral-300"}`}>Continue</button>
           </div>
         </div>
       </div>
@@ -4196,36 +4530,26 @@ function AssetDownloadModal({ request, onClose }) {
             <h3 className="mt-1 text-2xl font-semibold tracking-[-0.05em]">{request.title}</h3>
             <p className="mt-1 text-sm text-neutral-500">{totalLinks} link ready</p>
           </div>
-
-          <button
-            onClick={onClose}
-            className="grid h-10 w-10 place-items-center rounded-full bg-white text-neutral-500 shadow-sm hover:text-neutral-950"
-          >
-            <X size={18} />
-          </button>
+          <button onClick={onClose} className="grid h-10 w-10 place-items-center rounded-full bg-white text-neutral-500 shadow-sm hover:text-neutral-950"><X size={18} /></button>
         </div>
 
         <div className="request-scroll mt-4 max-h-[58vh] space-y-4 overflow-y-auto pr-1">
           {groups.map((group) => (
             <div key={group.id} className="rounded-[26px] bg-white/80 p-4 shadow-sm">
-              <div className="mb-3 flex items-center gap-2">
-                <Folder size={18} className="text-neutral-400" />
-                <p className="text-sm font-semibold text-neutral-950">{group.folder || "Untitled Folder"}</p>
-              </div>
-
+              <div className="mb-3 flex items-center gap-2"><Folder size={18} className="text-neutral-400" /><p className="text-sm font-semibold text-neutral-950">{group.folder || "Untitled Folder"}</p></div>
               <div className="space-y-2">
                 {group.children.map((child) => (
-                  <div key={child.id} className="flex items-center justify-between gap-3 rounded-2xl bg-neutral-50 px-3 py-3">
-                    <p className="min-w-0 truncate text-sm text-neutral-600">{child.subfolder || "Untitled Sub Folder"}</p>
-                    <a
-                      href={child.link}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex shrink-0 items-center gap-2 rounded-full bg-neutral-950 px-4 py-2 text-xs font-semibold text-white hover:bg-neutral-800"
-                    >
-                      <Download size={15} />
-                      Open
-                    </a>
+                  <div key={child.id} className="rounded-2xl bg-neutral-50 px-3 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-neutral-700">{child.subfolder || "Untitled Sub Folder"}</p>
+                        {child.note && <p className="mt-1 whitespace-pre-wrap text-xs leading-5 text-neutral-500">{child.note}</p>}
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <button type="button" onClick={() => handleCopyAssetLink(child.link)} className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-2 text-xs font-semibold text-neutral-700 shadow-sm hover:text-neutral-950" title="Copy asset link"><Copy size={14} />{copiedLink === child.link ? "Copied" : "Copy"}</button>
+                        <a href={child.link} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-full bg-neutral-950 px-4 py-2 text-xs font-semibold text-white hover:bg-neutral-800"><Download size={15} />Open</a>
+                      </div>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -4233,14 +4557,8 @@ function AssetDownloadModal({ request, onClose }) {
           ))}
         </div>
 
-        <div className="mt-4 flex justify-end">
-          <button
-            onClick={onClose}
-            className="rounded-2xl bg-white px-5 py-3 text-sm font-semibold text-neutral-600 shadow-sm hover:text-neutral-950"
-          >
-            Close
-          </button>
-        </div>
+        {localError && <p className="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-center text-xs font-medium text-red-600">{localError}</p>}
+        <div className="mt-4 flex justify-end"><button onClick={onClose} className="rounded-2xl bg-white px-5 py-3 text-sm font-semibold text-neutral-600 shadow-sm hover:text-neutral-950">Close</button></div>
       </div>
     </div>
   );
@@ -4263,6 +4581,8 @@ function AssetLinkEditorModal({
   onSave,
   onClose,
 }) {
+  useEscapeClose(onClose);
+
   return (
     <div className="fixed inset-0 z-[99999] grid place-items-center bg-black/25 p-4 backdrop-blur-sm">
       <div className="w-full max-w-6xl rounded-[32px] border border-white/70 bg-[#f5f5f3]/95 p-5 shadow-[0_35px_120px_rgba(0,0,0,.22)]">
@@ -4322,7 +4642,7 @@ function AssetLinkEditorModal({
 
                   <div className="space-y-2">
                     {(group.children || []).map((child, childIndex) => (
-                      <div key={child.id || childIndex} className="grid grid-cols-[1fr_1.6fr_42px] gap-3 rounded-[22px] bg-neutral-50 p-3">
+                      <div key={child.id || childIndex} className="grid grid-cols-[1fr_1.35fr_1fr_42px] gap-3 rounded-[22px] bg-neutral-50 p-3">
                         <Field label="Sub Folder">
                           <input
                             value={child.subfolder}
@@ -4337,6 +4657,15 @@ function AssetLinkEditorModal({
                             value={child.link}
                             onChange={(e) => onChildChange(groupIndex, childIndex, "link", e.target.value)}
                             placeholder="https://drive.google.com/..."
+                            className="field-input"
+                          />
+                        </Field>
+
+                        <Field label="Note">
+                          <input
+                            value={child.note || ""}
+                            onChange={(e) => onChildChange(groupIndex, childIndex, "note", e.target.value)}
+                            placeholder="Optional feedback for requester / KOL"
                             className="field-input"
                           />
                         </Field>
@@ -4496,7 +4825,37 @@ function RequestTrashModal({ items, onClose, onRestore, onPermanentDelete }) {
   );
 }
 
+function SimpleConfirmModal({
+  title,
+  message,
+  confirmLabel = "Yes",
+  cancelLabel = "No",
+  icon = "check",
+  onCancel,
+  onConfirm,
+}) {
+  useEscapeClose(onCancel);
+
+  const Icon = icon === "send" ? Send : CheckCircle2;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[999999] grid place-items-center bg-black/25 p-4 backdrop-blur-sm">
+      <div className="w-full max-w-md rounded-[30px] border border-white/70 bg-[#f5f5f3]/95 p-5 text-center shadow-[0_35px_120px_rgba(0,0,0,.22)]">
+        <div className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-neutral-950 text-white"><Icon size={20} /></div>
+        <h3 className="mt-4 text-2xl font-semibold tracking-[-0.05em]">{title}</h3>
+        <p className="mt-2 text-sm leading-6 text-neutral-500">{message}</p>
+        <div className="mt-6 grid grid-cols-2 gap-3">
+          <button type="button" onClick={onCancel} className="rounded-2xl bg-white px-5 py-3 text-sm font-semibold text-neutral-600 shadow-sm hover:text-neutral-950">{cancelLabel}</button>
+          <button type="button" onClick={onConfirm} className="rounded-2xl bg-neutral-950 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-neutral-800">{confirmLabel}</button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
 function DeleteConfirmModal({ title, message, onCancel, onConfirm }) {
+  useEscapeClose(onCancel);
   const [deleteCode, setDeleteCode] = useState("");
   const [localError, setLocalError] = useState("");
 
