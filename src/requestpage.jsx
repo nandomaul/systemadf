@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   Brush,
   CalendarDays,
+  Check,
   CheckCircle2,
   ChevronRight,
   ClipboardList,
@@ -17,6 +18,7 @@ import {
   Link2,
   Loader2,
   Lock,
+  Minus,
   Paperclip,
   Pin,
   Plus,
@@ -343,6 +345,12 @@ function formatFileSize(bytes) {
 
 function isImageFile(file) {
   return String(file?.type || "").startsWith("image/");
+}
+
+function isImageMeta(file) {
+  const type = String(file?.type || "").toLowerCase();
+  const name = String(file?.name || file?.path || "").toLowerCase();
+  return type.startsWith("image/") || /\.(png|jpe?g|webp|gif)$/i.test(name);
 }
 
 function makeAnnotatedFileName(name) {
@@ -1074,7 +1082,7 @@ export default function RequestPage() {
               ...item,
               file: nextFile,
               annotated: true,
-              note: item.note || "Annotated image attached.",
+              note: item.note || "Edited picture attached.",
             }
           : item
       )
@@ -1373,6 +1381,26 @@ export default function RequestPage() {
     }));
   };
 
+  const handleReplaceEditExistingFile = (index, nextFile) => {
+    if (!nextFile) return;
+
+    setEditDraft((prev) => ({
+      ...prev,
+      files: asFilesArray(prev?.files).filter((_, itemIndex) => itemIndex !== index),
+    }));
+
+    setEditUploadedFiles((prev) => [
+      ...prev,
+      {
+        id: makeId(),
+        file: nextFile,
+        note: "Edited picture attached.",
+        edited: true,
+        annotated: true,
+      },
+    ]);
+  };
+
   const addEditFiles = (incomingFiles) => {
     const files = Array.from(incomingFiles || []);
     setPageError("");
@@ -1419,6 +1447,24 @@ export default function RequestPage() {
 
   const handleRemoveEditUploadedFile = (index) => {
     setEditUploadedFiles((prev) => prev.filter((_, itemIndex) => itemIndex !== index));
+  };
+
+  const handleReplaceEditUploadedFile = (index, nextFile) => {
+    if (!nextFile) return;
+
+    setEditUploadedFiles((prev) =>
+      prev.map((item, itemIndex) =>
+        itemIndex === index
+          ? {
+              ...item,
+              file: nextFile,
+              note: item.note || "Edited picture attached.",
+              edited: true,
+              annotated: true,
+            }
+          : item
+      )
+    );
   };
 
   const handleEditUploadedFileNoteChange = (index, note) => {
@@ -2168,10 +2214,12 @@ export default function RequestPage() {
           onChange={handleEditDraftChange}
           onExistingFileNoteChange={handleEditExistingFileNoteChange}
           onRemoveExistingFile={handleRemoveEditExistingFile}
+          onReplaceExistingFile={handleReplaceEditExistingFile}
           onUploadFile={handleEditFileUpload}
           onDropFile={handleEditFileDrop}
           onNewFileNoteChange={handleEditUploadedFileNoteChange}
           onRemoveNewFile={handleRemoveEditUploadedFile}
+          onReplaceNewFile={handleReplaceEditUploadedFile}
           onCancelRequest={() => {
             setDeleteTarget(editRequest);
             setEditRequest(null);
@@ -3351,7 +3399,7 @@ function CreateRequestPanel({
                     <div className="flex items-center justify-between gap-3">
                       <span className="min-w-0 truncate text-neutral-600">
                         Attachment {index + 1} · {formatFileSize(file.size)}
-                        {fileItem.annotated ? <span className="ml-2 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">Annotated</span> : null}
+                        {fileItem.annotated ? <span className="ml-2 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">Edited</span> : null}
                       </span>
                       <div className="flex shrink-0 items-center gap-2">
                         {canAnnotate && (
@@ -3359,10 +3407,10 @@ function CreateRequestPanel({
                             type="button"
                             onClick={() => setAnnotateIndex(index)}
                             className="inline-flex items-center gap-1 rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-neutral-600 shadow-sm transition hover:text-neutral-950"
-                            title="Draw / add notes on image"
+                            title="Edit picture"
                           >
                             <Brush size={13} />
-                            Annotate
+                            Edit Picture
                           </button>
                         )}
                         <button type="button" onClick={() => handleRemoveUploadedFile(index)} className="text-neutral-400 transition hover:text-red-500"><X size={16} /></button>
@@ -3401,7 +3449,8 @@ function ImageAnnotationModal({ fileItem, onClose, onSave }) {
   useEscapeClose(onClose);
 
   const file = fileItem?.file || fileItem;
-  const canvasRef = useRef(null);
+  const baseCanvasRef = useRef(null);
+  const drawCanvasRef = useRef(null);
   const imageRef = useRef(null);
   const drawingRef = useRef(false);
   const startPointRef = useRef(null);
@@ -3411,20 +3460,13 @@ function ImageAnnotationModal({ fileItem, onClose, onSave }) {
   const [strokeColor, setStrokeColor] = useState("#ff2d2d");
   const [strokeSize, setStrokeSize] = useState(5);
   const [textValue, setTextValue] = useState("Note");
+  const [textSize, setTextSize] = useState(24);
   const [history, setHistory] = useState([]);
   const [ready, setReady] = useState(false);
   const [localError, setLocalError] = useState("");
 
-  const pushHistory = () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const dataUrl = canvas.toDataURL("image/png");
-    setHistory((prev) => [...prev.slice(-14), dataUrl]);
-  };
-
-  const redrawSnapshot = (snapshotUrl) => {
-    const canvas = canvasRef.current;
+  const restoreOverlayFromDataUrl = (snapshotUrl) => {
+    const canvas = drawCanvasRef.current;
     const context = canvas?.getContext("2d");
     if (!canvas || !context || !snapshotUrl) return;
 
@@ -3436,27 +3478,84 @@ function ImageAnnotationModal({ fileItem, onClose, onSave }) {
     image.src = snapshotUrl;
   };
 
+  const pushHistory = () => {
+    const canvas = drawCanvasRef.current;
+    if (!canvas) return;
+
+    const dataUrl = canvas.toDataURL("image/png");
+    setHistory((prev) => {
+      const last = prev[prev.length - 1];
+      if (last === dataUrl) return prev;
+      return [...prev.slice(-19), dataUrl];
+    });
+  };
+
+  const configureStroke = (context, mode = "draw") => {
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    context.lineWidth = strokeSize;
+    context.strokeStyle = strokeColor;
+    context.fillStyle = strokeColor;
+    context.globalCompositeOperation = mode === "erase" ? "destination-out" : "source-over";
+  };
+
+  const drawText = (context, text, point) => {
+    const value = String(text || "").trim();
+    if (!value) return;
+
+    context.save();
+    context.font = `800 ${textSize}px Inter, Arial, sans-serif`;
+    context.lineWidth = Math.max(3, Math.round(textSize / 7));
+    context.strokeStyle = "rgba(255,255,255,.92)";
+    context.fillStyle = strokeColor;
+    context.strokeText(value, point.x, point.y);
+    context.fillText(value, point.x, point.y);
+    context.restore();
+  };
+
+  const drawStamp = (context, value, point) => {
+    const size = Math.max(22, textSize + strokeSize * 2);
+
+    context.save();
+    context.font = `900 ${size}px Inter, Arial, sans-serif`;
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.lineWidth = Math.max(4, Math.round(size / 8));
+    context.strokeStyle = "rgba(255,255,255,.95)";
+    context.fillStyle = strokeColor;
+    context.strokeText(value, point.x, point.y);
+    context.fillText(value, point.x, point.y);
+    context.restore();
+  };
+
   useEffect(() => {
-    if (!file || !canvasRef.current) return undefined;
+    if (!file || !baseCanvasRef.current || !drawCanvasRef.current) return undefined;
 
     const objectUrl = URL.createObjectURL(file);
     const image = new Image();
 
     image.onload = () => {
-      const canvas = canvasRef.current;
-      const context = canvas?.getContext("2d");
-      if (!canvas || !context) return;
+      const baseCanvas = baseCanvasRef.current;
+      const drawCanvas = drawCanvasRef.current;
+      const baseContext = baseCanvas?.getContext("2d");
+      const drawContext = drawCanvas?.getContext("2d");
+      if (!baseCanvas || !drawCanvas || !baseContext || !drawContext) return;
 
-      canvas.width = image.naturalWidth || image.width;
-      canvas.height = image.naturalHeight || image.height;
+      const width = image.naturalWidth || image.width;
+      const height = image.naturalHeight || image.height;
 
-      context.clearRect(0, 0, canvas.width, canvas.height);
-      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      baseCanvas.width = width;
+      baseCanvas.height = height;
+      drawCanvas.width = width;
+      drawCanvas.height = height;
+
+      baseContext.clearRect(0, 0, width, height);
+      baseContext.drawImage(image, 0, 0, width, height);
+      drawContext.clearRect(0, 0, width, height);
 
       imageRef.current = image;
       setReady(true);
-
-      window.setTimeout(pushHistory, 0);
+      setHistory([drawCanvas.toDataURL("image/png")]);
     };
 
     image.onerror = () => {
@@ -3470,27 +3569,62 @@ function ImageAnnotationModal({ fileItem, onClose, onSave }) {
     };
   }, [file]);
 
+  const handleUndo = () => {
+    setHistory((prev) => {
+      if (prev.length <= 1) return prev;
+
+      const next = prev.slice(0, -1);
+      restoreOverlayFromDataUrl(next[next.length - 1]);
+      return next;
+    });
+  };
+
+  const handleClear = () => {
+    const canvas = drawCanvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context) return;
+
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    pushHistory();
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      const key = event.key.toLowerCase();
+      const command = event.metaKey || event.ctrlKey;
+
+      if (command && key === "z") {
+        event.preventDefault();
+        handleUndo();
+      }
+
+      if ((command && key === "r") || (event.shiftKey && key === "r")) {
+        event.preventDefault();
+        handleClear();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [history, strokeColor, strokeSize, textSize]);
+
   const handlePointerDown = (event) => {
     if (!ready) return;
 
-    const canvas = canvasRef.current;
+    const canvas = drawCanvasRef.current;
     const context = canvas?.getContext("2d");
     if (!canvas || !context) return;
 
     const point = getCanvasPoint(event, canvas);
 
     if (tool === "text") {
-      const value = String(textValue || "").trim();
-      if (!value) return;
+      drawText(context, textValue, point);
+      pushHistory();
+      return;
+    }
 
-      context.save();
-      context.fillStyle = strokeColor;
-      context.font = `700 ${Math.max(18, strokeSize * 5)}px Inter, Arial, sans-serif`;
-      context.lineWidth = 4;
-      context.strokeStyle = "rgba(255,255,255,.86)";
-      context.strokeText(value, point.x, point.y);
-      context.fillText(value, point.x, point.y);
-      context.restore();
+    if (tool === "check" || tool === "xmark") {
+      drawStamp(context, tool === "check" ? "✓" : "×", point);
       pushHistory();
       return;
     }
@@ -3500,105 +3634,107 @@ function ImageAnnotationModal({ fileItem, onClose, onSave }) {
     snapshotRef.current = canvas.toDataURL("image/png");
 
     if (tool === "brush" || tool === "eraser") {
-      context.save();
-      context.lineCap = "round";
-      context.lineJoin = "round";
-      context.lineWidth = strokeSize;
-      context.strokeStyle = tool === "eraser" ? "#ffffff" : strokeColor;
-      context.globalCompositeOperation = tool === "eraser" ? "destination-out" : "source-over";
+      configureStroke(context, tool === "eraser" ? "erase" : "draw");
       context.beginPath();
       context.moveTo(point.x, point.y);
-      context.restore();
     }
+  };
+
+  const drawFromSnapshot = (point) => {
+    const canvas = drawCanvasRef.current;
+    const context = canvas?.getContext("2d");
+    const start = startPointRef.current;
+    const snapshot = snapshotRef.current;
+    if (!canvas || !context || !start || !snapshot) return;
+
+    const image = new Image();
+    image.onload = () => {
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0);
+      context.save();
+      configureStroke(context);
+      context.setLineDash(tool === "box" ? [12, 7] : []);
+
+      if (tool === "box") {
+        context.strokeRect(start.x, start.y, point.x - start.x, point.y - start.y);
+      }
+
+      if (tool === "line") {
+        context.beginPath();
+        context.moveTo(start.x, start.y);
+        context.lineTo(point.x, point.y);
+        context.stroke();
+      }
+
+      context.restore();
+    };
+    image.src = snapshot;
   };
 
   const handlePointerMove = (event) => {
     if (!drawingRef.current || !ready) return;
 
-    const canvas = canvasRef.current;
+    const canvas = drawCanvasRef.current;
     const context = canvas?.getContext("2d");
     if (!canvas || !context) return;
 
     const point = getCanvasPoint(event, canvas);
 
     if (tool === "brush" || tool === "eraser") {
-      context.save();
-      context.lineCap = "round";
-      context.lineJoin = "round";
-      context.lineWidth = strokeSize;
-      context.strokeStyle = tool === "eraser" ? "#ffffff" : strokeColor;
-      context.globalCompositeOperation = tool === "eraser" ? "destination-out" : "source-over";
+      configureStroke(context, tool === "eraser" ? "erase" : "draw");
       context.lineTo(point.x, point.y);
       context.stroke();
-      context.restore();
       return;
     }
 
-    if (tool === "box") {
-      redrawSnapshot(snapshotRef.current);
-
-      const start = startPointRef.current;
-      window.requestAnimationFrame(() => {
-        const liveContext = canvas.getContext("2d");
-        if (!liveContext || !start) return;
-
-        liveContext.save();
-        liveContext.strokeStyle = strokeColor;
-        liveContext.lineWidth = strokeSize;
-        liveContext.setLineDash([14, 8]);
-        liveContext.strokeRect(start.x, start.y, point.x - start.x, point.y - start.y);
-        liveContext.restore();
-      });
+    if (tool === "box" || tool === "line") {
+      drawFromSnapshot(point);
     }
   };
 
-  const handlePointerUp = () => {
+  const handlePointerUp = (event) => {
     if (!drawingRef.current) return;
 
-    drawingRef.current = false;
-    startPointRef.current = null;
-    snapshotRef.current = null;
-    pushHistory();
-  };
+    if ((tool === "box" || tool === "line") && event) {
+      const canvas = drawCanvasRef.current;
+      if (canvas) drawFromSnapshot(getCanvasPoint(event, canvas));
+    }
 
-  const handleUndo = () => {
-    setHistory((prev) => {
-      if (prev.length <= 1) return prev;
-
-      const next = prev.slice(0, -1);
-      redrawSnapshot(next[next.length - 1]);
-      return next;
-    });
-  };
-
-  const handleClear = () => {
-    const canvas = canvasRef.current;
-    const context = canvas?.getContext("2d");
-    const image = imageRef.current;
-
-    if (!canvas || !context || !image) return;
-
-    context.clearRect(0, 0, canvas.width, canvas.height);
-    context.drawImage(image, 0, 0, canvas.width, canvas.height);
-    pushHistory();
+    window.setTimeout(() => {
+      drawingRef.current = false;
+      startPointRef.current = null;
+      snapshotRef.current = null;
+      pushHistory();
+    }, 20);
   };
 
   const handleSave = () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    const baseCanvas = baseCanvasRef.current;
+    const drawCanvas = drawCanvasRef.current;
+    if (!baseCanvas || !drawCanvas) return;
 
-    canvas.toBlob((blob) => {
+    const mergedCanvas = document.createElement("canvas");
+    mergedCanvas.width = baseCanvas.width;
+    mergedCanvas.height = baseCanvas.height;
+
+    const context = mergedCanvas.getContext("2d");
+    if (!context) return;
+
+    context.drawImage(baseCanvas, 0, 0);
+    context.drawImage(drawCanvas, 0, 0);
+
+    mergedCanvas.toBlob((blob) => {
       if (!blob) {
-        setLocalError("Gagal save annotation. Coba ulang.");
+        setLocalError("Gagal save edit. Coba ulang.");
         return;
       }
 
-      const annotatedFile = new File([blob], makeAnnotatedFileName(file?.name), {
+      const editedFile = new File([blob], makeAnnotatedFileName(file?.name), {
         type: "image/png",
         lastModified: Date.now(),
       });
 
-      onSave?.(annotatedFile);
+      onSave?.(editedFile);
     }, "image/png", 0.92);
   };
 
@@ -3609,15 +3745,23 @@ function ImageAnnotationModal({ fileItem, onClose, onSave }) {
         : "bg-white text-neutral-600 shadow-sm hover:text-neutral-950"
     }`;
 
+  const quickColors = [
+    { label: "Red", value: "#ff2d2d" },
+    { label: "Green", value: "#16a34a" },
+    { label: "Blue", value: "#2563eb" },
+    { label: "Yellow", value: "#facc15" },
+    { label: "Black", value: "#111111" },
+  ];
+
   return createPortal(
     <div className="fixed inset-0 z-[999999] grid place-items-center bg-black/35 p-4 backdrop-blur-sm">
       <div className="flex max-h-[calc(100vh-2rem)] w-full max-w-6xl flex-col overflow-hidden rounded-[32px] border border-white/70 bg-[#f5f5f3]/96 shadow-[0_35px_120px_rgba(0,0,0,.28)]">
         <div className="shrink-0 border-b border-black/5 p-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <p className="text-xs font-medium uppercase tracking-[0.2em] text-neutral-400">Image Annotation</p>
-              <h3 className="mt-1 text-2xl font-semibold tracking-[-0.05em]">Mark request image</h3>
-              <p className="mt-1 text-sm text-neutral-500">Brush, box, text note, undo, then save back to attachment.</p>
+              <p className="text-xs font-medium uppercase tracking-[0.2em] text-neutral-400">Image Editor</p>
+              <h3 className="mt-1 text-2xl font-semibold tracking-[-0.05em]">Edit request image</h3>
+              <p className="mt-1 text-sm text-neutral-500">Brush, line, box, text, check, X mark, then save back to attachment.</p>
             </div>
 
             <button onClick={onClose} className="grid h-10 w-10 place-items-center rounded-full bg-white text-neutral-500 shadow-sm hover:text-neutral-950">
@@ -3627,36 +3771,67 @@ function ImageAnnotationModal({ fileItem, onClose, onSave }) {
 
           <div className="mt-4 flex flex-wrap items-center gap-2">
             <button type="button" onClick={() => setTool("brush")} className={toolButtonClass("brush")}><Brush size={15} /> Brush</button>
+            <button type="button" onClick={() => setTool("line")} className={toolButtonClass("line")}><Minus size={15} /> Line</button>
             <button type="button" onClick={() => setTool("box")} className={toolButtonClass("box")}><Square size={15} /> Box</button>
             <button type="button" onClick={() => setTool("text")} className={toolButtonClass("text")}><Type size={15} /> Text</button>
             <button type="button" onClick={() => setTool("eraser")} className={toolButtonClass("eraser")}><Eraser size={15} /> Eraser</button>
+            <button type="button" onClick={() => setTool("check")} className={toolButtonClass("check")}><Check size={15} /> Check</button>
+            <button type="button" onClick={() => setTool("xmark")} className={toolButtonClass("xmark")}><X size={15} /> X</button>
 
             <input value={strokeColor} onChange={(event) => setStrokeColor(event.target.value)} type="color" className="h-10 w-12 cursor-pointer rounded-2xl border border-black/5 bg-white p-1 shadow-sm" title="Color" />
-            <input value={strokeSize} onChange={(event) => setStrokeSize(Number(event.target.value))} type="range" min="2" max="18" className="w-28 accent-black" title="Brush size" />
+            <div className="flex rounded-2xl bg-white p-1 shadow-sm">
+              {quickColors.map((item) => (
+                <button
+                  key={item.value}
+                  type="button"
+                  onClick={() => setStrokeColor(item.value)}
+                  title={item.label}
+                  className={`mx-0.5 h-7 w-7 rounded-xl border ${strokeColor === item.value ? "border-neutral-950" : "border-black/5"}`}
+                  style={{ backgroundColor: item.value }}
+                />
+              ))}
+            </div>
+
+            <input value={strokeSize} onChange={(event) => setStrokeSize(Number(event.target.value))} type="range" min="2" max="18" className="w-28 accent-black" title="Stroke size" />
+
+            <select value={textSize} onChange={(event) => setTextSize(Number(event.target.value))} className="rounded-2xl border border-black/5 bg-white px-3 py-2 text-xs font-semibold text-neutral-600 outline-none shadow-sm" title="Text size">
+              <option value={16}>Text 16</option>
+              <option value={20}>Text 20</option>
+              <option value={24}>Text 24</option>
+              <option value={32}>Text 32</option>
+              <option value={42}>Text 42</option>
+            </select>
 
             <input
               value={textValue}
               onChange={(event) => setTextValue(event.target.value)}
               placeholder="Text note..."
-              className="min-w-[180px] rounded-2xl border border-black/5 bg-white px-3 py-2 text-xs font-medium text-neutral-700 outline-none placeholder:text-neutral-400"
+              className="min-w-[160px] rounded-2xl border border-black/5 bg-white px-3 py-2 text-xs font-medium text-neutral-700 outline-none placeholder:text-neutral-400"
             />
 
             <button type="button" onClick={handleUndo} className="inline-flex items-center gap-2 rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-neutral-600 shadow-sm hover:text-neutral-950"><Undo2 size={15} /> Undo</button>
             <button type="button" onClick={handleClear} className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-neutral-600 shadow-sm hover:text-neutral-950">Reset</button>
           </div>
+
+          <p className="mt-3 rounded-2xl bg-white/70 px-4 py-2 text-[11px] font-medium text-neutral-500">
+            Shortcut: Cmd/Ctrl + Z = Undo · Cmd/Ctrl + R = Reset · Eraser removes annotations only.
+          </p>
         </div>
 
         <div className="request-scroll min-h-0 flex-1 overflow-auto p-4">
           {localError ? <p className="mb-3 rounded-2xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-600">{localError}</p> : null}
           <div className="rounded-[28px] bg-white/82 p-3 shadow-sm">
-            <canvas
-              ref={canvasRef}
-              onPointerDown={handlePointerDown}
-              onPointerMove={handlePointerMove}
-              onPointerUp={handlePointerUp}
-              onPointerLeave={handlePointerUp}
-              className="mx-auto block max-h-[60vh] max-w-full touch-none rounded-[22px] bg-neutral-100 shadow-sm"
-            />
+            <div className="relative mx-auto w-fit max-w-full overflow-hidden rounded-[22px] bg-neutral-100 shadow-sm">
+              <canvas ref={baseCanvasRef} className="block max-h-[60vh] max-w-full" />
+              <canvas
+                ref={drawCanvasRef}
+                onPointerDown={handlePointerDown}
+                onPointerMove={handlePointerMove}
+                onPointerUp={handlePointerUp}
+                onPointerLeave={handlePointerUp}
+                className="absolute inset-0 h-full w-full touch-none cursor-crosshair"
+              />
+            </div>
           </div>
         </div>
 
@@ -3665,7 +3840,7 @@ function ImageAnnotationModal({ fileItem, onClose, onSave }) {
             <button type="button" onClick={onClose} className="rounded-2xl bg-white px-5 py-3 text-sm font-semibold text-neutral-600 shadow-sm hover:text-neutral-950">Cancel</button>
             <button type="button" onClick={handleSave} className="inline-flex items-center gap-2 rounded-2xl bg-neutral-950 px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-neutral-800">
               <Save size={16} />
-              Save Annotation
+              Save Edit
             </button>
           </div>
         </div>
@@ -3828,6 +4003,38 @@ function EditRequestPanel({
   );
 }
 
+
+function AttachmentThumb({ file, url, label = "Attachment preview" }) {
+  const [localUrl, setLocalUrl] = useState("");
+  const imageLike = isImageFile(file) || isImageMeta(file);
+
+  useEffect(() => {
+    if (!file || !(file instanceof File) || !imageLike) {
+      setLocalUrl("");
+      return undefined;
+    }
+
+    const objectUrl = URL.createObjectURL(file);
+    setLocalUrl(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [file, imageLike]);
+
+  const source = url || localUrl;
+
+  return (
+    <div className="grid h-16 w-24 shrink-0 place-items-center overflow-hidden rounded-2xl border border-black/5 bg-neutral-100 shadow-inner">
+      {imageLike && source ? (
+        <img src={source} alt={label} className="h-full w-full object-cover" />
+      ) : (
+        <div className="flex flex-col items-center gap-1 text-neutral-400">
+          <Paperclip size={16} />
+          <span className="text-[10px] font-semibold uppercase tracking-[0.12em]">File</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RequestEditModal({
   request,
   draft,
@@ -3836,10 +4043,12 @@ function RequestEditModal({
   onChange,
   onExistingFileNoteChange,
   onRemoveExistingFile,
+  onReplaceExistingFile,
   onUploadFile,
   onDropFile,
   onNewFileNoteChange,
   onRemoveNewFile,
+  onReplaceNewFile,
   onCancelRequest,
   onSave,
   onClose,
@@ -3850,6 +4059,9 @@ function RequestEditModal({
   const totalFiles = existingFiles.length + newFiles.length;
   const [signedFiles, setSignedFiles] = useState([]);
   const [dragActive, setDragActive] = useState(false);
+  const [editImageTarget, setEditImageTarget] = useState(null);
+  const [editImageLoading, setEditImageLoading] = useState(false);
+  const [modalError, setModalError] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -3880,6 +4092,51 @@ function RequestEditModal({
     };
   }, [JSON.stringify(existingFiles.map((file) => file?.path || ""))]);
 
+  const openExistingImageEditor = async (file, index) => {
+    if (!file?.url || !isImageMeta(file)) return;
+
+    setEditImageLoading(true);
+    setModalError("");
+
+    try {
+      const response = await fetch(file.url);
+      if (!response.ok) throw new Error("Image failed to load");
+
+      const blob = await response.blob();
+      const fallbackName = `attachment-${index + 1}.png`;
+      const nextFile = new File([blob], file.name || fallbackName, {
+        type: blob.type || file.type || "image/png",
+        lastModified: Date.now(),
+      });
+
+      setEditImageTarget({ kind: "existing", index, fileItem: { file: nextFile, note: file.note || "" } });
+    } catch (error) {
+      setModalError("Gambar existing gagal dibuka. Coba klik View dulu atau replace file.");
+    } finally {
+      setEditImageLoading(false);
+    }
+  };
+
+  const openNewImageEditor = (fileItem, index) => {
+    const file = fileItem?.file || fileItem;
+    if (!isImageFile(file)) return;
+
+    setModalError("");
+    setEditImageTarget({ kind: "new", index, fileItem });
+  };
+
+  const handleSaveEditedImage = (editedFile) => {
+    if (!editImageTarget || !editedFile) return;
+
+    if (editImageTarget.kind === "existing") {
+      onReplaceExistingFile?.(editImageTarget.index, editedFile);
+    } else {
+      onReplaceNewFile?.(editImageTarget.index, editedFile);
+    }
+
+    setEditImageTarget(null);
+  };
+
   return (
     <div className="fixed inset-0 z-[99999] grid place-items-center bg-black/25 p-4 backdrop-blur-sm">
       <div className="flex max-h-[calc(100vh-2rem)] w-full max-w-4xl flex-col overflow-hidden rounded-[32px] border border-white/70 bg-[#f5f5f3]/95 shadow-[0_35px_120px_rgba(0,0,0,.22)]">
@@ -3897,6 +4154,7 @@ function RequestEditModal({
         </div>
 
         <div className="request-scroll min-h-0 flex-1 overflow-y-auto p-5">
+          {modalError ? <p className="mb-4 rounded-2xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-600">{modalError}</p> : null}
           <div className="grid gap-4 md:grid-cols-2">
             <Field label="Category">
               <select value={draft.category} onChange={(e) => onChange("category", e.target.value)} className="field-input">
@@ -3999,7 +4257,7 @@ function RequestEditModal({
               </div>
 
               <p className="mb-4 rounded-2xl bg-neutral-50 px-4 py-3 text-xs leading-5 text-neutral-500">
-                Drag files from Mac / Windows folder into this box, or click Upload / Replace. PDF, JPG, PNG · max {MAX_ATTACHMENTS} attachments · max {MAX_FILE_SIZE_MB}MB each. Existing files can be removed, re-noted, or replaced.
+                Drag files from Mac / Windows folder into this box, or click Upload / Replace. PDF, JPG, PNG · max {MAX_ATTACHMENTS} attachments · max {MAX_FILE_SIZE_MB}MB each. Existing files can be viewed, edited, removed, re-noted, or replaced.
               </p>
 
               {totalFiles === 0 ? (
@@ -4008,46 +4266,80 @@ function RequestEditModal({
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {signedFiles.map((file, index) => (
-                    <div key={file.path || index} className="rounded-[22px] border border-black/5 bg-white p-3 shadow-sm">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-semibold text-neutral-700">Attachment {index + 1}</p>
-                          <p className="mt-0.5 text-xs text-neutral-400">{file.size || "-"}</p>
+                  {signedFiles.map((file, index) => {
+                    const imageLike = isImageMeta(file);
+
+                    return (
+                      <div key={file.path || index} className="rounded-[22px] border border-black/5 bg-white p-3 shadow-sm">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div className="flex min-w-0 items-center gap-3">
+                            <AttachmentThumb file={file} url={file.url} label={`Attachment ${index + 1}`} />
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="text-sm font-semibold text-neutral-700">Attachment {index + 1}</p>
+                                {imageLike ? <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-[10px] font-semibold text-neutral-500">Picture</span> : null}
+                              </div>
+                              <p className="mt-0.5 text-xs text-neutral-400">{file.size || "-"}</p>
+                              <p className="mt-1 max-w-[260px] truncate text-[11px] text-neutral-400">{file.name || file.path || "Uploaded file"}</p>
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            {file.url && (
+                              <a href={file.url} target="_blank" rel="noreferrer" className="rounded-full bg-neutral-100 px-4 py-2 text-xs font-semibold text-neutral-600 hover:bg-neutral-200">
+                                View
+                              </a>
+                            )}
+                            {imageLike && file.url ? (
+                              <button type="button" onClick={() => openExistingImageEditor(file, index)} disabled={editImageLoading} className="inline-flex items-center gap-1 rounded-full bg-neutral-950 px-4 py-2 text-xs font-semibold text-white hover:bg-neutral-800 disabled:opacity-50">
+                                <Brush size={13} />
+                                Edit Picture
+                              </button>
+                            ) : null}
+                            <button type="button" onClick={() => onRemoveExistingFile(index)} className="rounded-full bg-red-50 px-4 py-2 text-xs font-semibold text-red-600 hover:bg-red-100">
+                              Remove
+                            </button>
+                          </div>
                         </div>
-                        <div className="flex gap-2">
-                          {file.url && (
-                            <a href={file.url} target="_blank" rel="noreferrer" className="rounded-full bg-neutral-100 px-4 py-2 text-xs font-semibold text-neutral-600 hover:bg-neutral-200">
-                              Open
-                            </a>
-                          )}
-                          <button onClick={() => onRemoveExistingFile(index)} className="rounded-full bg-red-50 px-4 py-2 text-xs font-semibold text-red-600 hover:bg-red-100">
-                            Remove
-                          </button>
-                        </div>
+                        <textarea
+                          value={existingFiles[index]?.note || ""}
+                          onChange={(event) => onExistingFileNoteChange(index, event.target.value)}
+                          placeholder="Attachment note..."
+                          rows={2}
+                          className="mt-3 w-full resize-none rounded-2xl border border-black/5 bg-neutral-50 px-3 py-2 text-xs text-neutral-600 outline-none placeholder:text-neutral-400 focus:bg-white"
+                        />
                       </div>
-                      <textarea
-                        value={existingFiles[index]?.note || ""}
-                        onChange={(event) => onExistingFileNoteChange(index, event.target.value)}
-                        placeholder="Attachment note..."
-                        rows={2}
-                        className="mt-3 w-full resize-none rounded-2xl border border-black/5 bg-neutral-50 px-3 py-2 text-xs text-neutral-600 outline-none placeholder:text-neutral-400 focus:bg-white"
-                      />
-                    </div>
-                  ))}
+                    );
+                  })}
 
                   {newFiles.map((fileItem, index) => {
                     const file = fileItem.file || fileItem;
+                    const imageLike = isImageFile(file);
+
                     return (
                       <div key={`${fileItem.id || file.name}-${index}`} className="rounded-[22px] border border-black/5 bg-white p-3 shadow-sm">
                         <div className="flex flex-wrap items-center justify-between gap-3">
-                          <div>
-                            <p className="text-sm font-semibold text-neutral-700">New Attachment {existingFiles.length + index + 1}</p>
-                            <p className="mt-0.5 text-xs text-neutral-400">{formatFileSize(file.size)}</p>
+                          <div className="flex min-w-0 items-center gap-3">
+                            <AttachmentThumb file={file} label={`New Attachment ${existingFiles.length + index + 1}`} />
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="text-sm font-semibold text-neutral-700">New Attachment {existingFiles.length + index + 1}</p>
+                                {fileItem.edited || fileItem.annotated ? <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">Edited</span> : null}
+                              </div>
+                              <p className="mt-0.5 text-xs text-neutral-400">{formatFileSize(file.size)}</p>
+                              <p className="mt-1 max-w-[260px] truncate text-[11px] text-neutral-400">{file.name}</p>
+                            </div>
                           </div>
-                          <button onClick={() => onRemoveNewFile(index)} className="rounded-full bg-red-50 px-4 py-2 text-xs font-semibold text-red-600 hover:bg-red-100">
-                            Remove
-                          </button>
+                          <div className="flex flex-wrap gap-2">
+                            {imageLike ? (
+                              <button type="button" onClick={() => openNewImageEditor(fileItem, index)} className="inline-flex items-center gap-1 rounded-full bg-neutral-950 px-4 py-2 text-xs font-semibold text-white hover:bg-neutral-800">
+                                <Brush size={13} />
+                                Edit Picture
+                              </button>
+                            ) : null}
+                            <button type="button" onClick={() => onRemoveNewFile(index)} className="rounded-full bg-red-50 px-4 py-2 text-xs font-semibold text-red-600 hover:bg-red-100">
+                              Remove
+                            </button>
+                          </div>
                         </div>
                         <textarea
                           value={fileItem.note || ""}
@@ -4086,6 +4378,14 @@ function RequestEditModal({
           </div>
         </div>
       </div>
+
+      {editImageTarget && (
+        <ImageAnnotationModal
+          fileItem={editImageTarget.fileItem}
+          onClose={() => setEditImageTarget(null)}
+          onSave={handleSaveEditedImage}
+        />
+      )}
     </div>
   );
 }
