@@ -57,8 +57,28 @@ function getCurrentPath() {
   return normalizePath(window.location.pathname);
 }
 
+function resolveRouteBase(path) {
+  const cleanPath = normalizePath(path);
+
+  if (
+    cleanPath === "/requestpage" ||
+    cleanPath.startsWith("/requestpage/")
+  ) {
+    return "/requestpage";
+  }
+
+  if (
+    cleanPath === "/catalog" ||
+    cleanPath.startsWith("/catalog/")
+  ) {
+    return "/catalog";
+  }
+
+  return cleanPath;
+}
+
 function isValidRoute(path) {
-  return Boolean(ROUTES[normalizePath(path)]);
+  return Boolean(ROUTES[resolveRouteBase(path)]);
 }
 
 function readInternalHistory() {
@@ -447,7 +467,7 @@ export default function App() {
   }, [auth?.themeMode]);
 
   const activeRoute = useMemo(() => {
-    return ROUTES[currentPath] || ROUTES[DEFAULT_ROUTE];
+    return ROUTES[resolveRouteBase(currentPath)] || ROUTES[DEFAULT_ROUTE];
   }, [currentPath]);
 
   const PageComponent = activeRoute.component;

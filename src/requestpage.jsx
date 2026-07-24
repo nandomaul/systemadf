@@ -838,8 +838,147 @@ function goHomepage() {
   window.location.href = "/popup";
 }
 
+
+const REQUEST_MENU_BASE = "/requestpage";
+
+const REQUEST_MENU_TO_PATH = {
+  request: "requestdesign",
+  manage: "managerequest",
+  calendar: "projectcalendar",
+  notes: "notes",
+};
+
+const REQUEST_PATH_TO_MENU = {
+  requestdesign: "request",
+  designrequest: "request",
+  managerequest: "manage",
+  manage: "manage",
+  projectcalendar: "calendar",
+  calendar: "calendar",
+  notes: "notes",
+};
+
+function readRequestMenuFromPath() {
+  if (typeof window === "undefined") return "request";
+
+  const cleanPath = String(window.location.pathname || "")
+    .split("?")[0]
+    .split("#")[0]
+    .replace(/\/+$/, "")
+    .toLowerCase();
+
+  if (cleanPath === REQUEST_MENU_BASE) return "request";
+
+  if (!cleanPath.startsWith(`${REQUEST_MENU_BASE}/`)) return "request";
+
+  const parts = cleanPath
+    .slice(REQUEST_MENU_BASE.length + 1)
+    .split("/")
+    .filter(Boolean);
+
+  const lastPart = parts[parts.length - 1] || "requestdesign";
+
+  return REQUEST_PATH_TO_MENU[lastPart] || "request";
+}
+
+function writeRequestMenuPath(menuKey, replace = false) {
+  if (typeof window === "undefined") return;
+
+  const slug = REQUEST_MENU_TO_PATH[menuKey] || "requestdesign";
+  const nextPath = `${REQUEST_MENU_BASE}/${slug}`;
+  const currentPath = String(window.location.pathname || "").replace(/\/+$/, "") || "/";
+
+  if (currentPath === nextPath) return;
+
+  const method = replace ? "replaceState" : "pushState";
+  window.history[method]({ adf: true, path: nextPath }, "", nextPath);
+  window.dispatchEvent(new Event("adf-route-change"));
+}
+
+
+const REQUEST_MENU_BASE_V2 = "/requestpage";
+
+const REQUEST_MENU_TO_PATH_V2 = {
+  request: "requestdesign",
+  manage: "managerequest",
+  calendar: "projectcalendar",
+  notes: "notes",
+};
+
+const REQUEST_PATH_TO_MENU_V2 = {
+  requestdesign: "request",
+  designrequest: "request",
+  managerequest: "manage",
+  manage: "manage",
+  projectcalendar: "calendar",
+  calendar: "calendar",
+  notes: "notes",
+};
+
+function readRequestMenuFromPathV2() {
+  if (typeof window === "undefined") return "request";
+
+  const cleanPath = String(window.location.pathname || "")
+    .split("?")[0]
+    .split("#")[0]
+    .replace(/\/+$/, "")
+    .toLowerCase();
+
+  if (cleanPath === REQUEST_MENU_BASE_V2) return "request";
+
+  if (!cleanPath.startsWith(`${REQUEST_MENU_BASE_V2}/`)) return "request";
+
+  const part = cleanPath
+    .slice(REQUEST_MENU_BASE_V2.length + 1)
+    .split("/")
+    .filter(Boolean)[0];
+
+  return REQUEST_PATH_TO_MENU_V2[part] || "request";
+}
+
+function writeRequestMenuPathV2(menuKey, replace = true) {
+  if (typeof window === "undefined") return;
+
+  const slug = REQUEST_MENU_TO_PATH_V2[menuKey] || "requestdesign";
+  const nextPath = `${REQUEST_MENU_BASE_V2}/${slug}`;
+  const currentPath = String(window.location.pathname || "").replace(/\/+$/, "") || "/";
+
+  if (currentPath === nextPath) return;
+
+  const method = replace ? "replaceState" : "pushState";
+  window.history[method]({ adf: true, path: nextPath }, "", nextPath);
+  window.dispatchEvent(new Event("adf-route-change"));
+}
+
 export default function RequestPage() {
-  const [activeMenu, setActiveMenu] = useState(getInitialRequestMenu);
+  const [activeMenu, setActiveMenu] = useState(() => readRequestMenuFromPathV2());
+
+  useEffect(() => {
+    const syncMenuFromUrl = () => {
+      const nextMenu = readRequestMenuFromPathV2();
+      setActiveMenu((currentMenu) => (currentMenu === nextMenu ? currentMenu : nextMenu));
+    };
+
+    syncMenuFromUrl();
+
+    window.addEventListener("popstate", syncMenuFromUrl);
+    window.addEventListener("adf-route-change", syncMenuFromUrl);
+
+    return () => {
+      window.removeEventListener("popstate", syncMenuFromUrl);
+      window.removeEventListener("adf-route-change", syncMenuFromUrl);
+    };
+  }, []);
+
+  useEffect(() => {
+    const menuFromPath = readRequestMenuFromPathV2();
+
+    if (menuFromPath !== activeMenu) return;
+
+    writeRequestMenuPathV2(activeMenu, true);
+  }, [activeMenu]);
+
+
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [sortBy, setSortBy] = useState("date");
   const [requests, setRequests] = useState([]);
@@ -906,6 +1045,25 @@ export default function RequestPage() {
     loadCalendarNotes();
     loadRequestTrash();
   }, []);
+
+  useEffect(() => {
+    writeRequestMenuPath(activeMenu, true);
+  }, [activeMenu]);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      setActiveMenu(readRequestMenuFromPath());
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    window.addEventListener("adf-route-change", handlePopState);
+
+    return () => {
+      window.removeEventListener("popstate", handlePopState);
+      window.removeEventListener("adf-route-change", handlePopState);
+    };
+  }, []);
+
 
   useEffect(() => {
     let active = true;
