@@ -1,25 +1,30 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="en">
   <head>
-    <meta charset="utf-8">
-    <title>ADF System Redirect</title>
-    <script type="text/javascript">
-      // Script untuk menangani rute SPA pada hosting statis
-      var pathSegmentsToKeep = 0;
-      var l = window.location;
-      
-      // Mencegah redirect berulang jika sudah ada parameter 'p'
-      if (l.search.indexOf('p=/') === -1) {
-        l.replace(
-          l.protocol + '//' + l.hostname + (l.port ? ':' + l.port : '') +
-          l.pathname.split('/').slice(0, 1 + pathSegmentsToKeep).join('/') + '/?p=/' +
-          l.pathname.split('/').slice(1 + pathSegmentsToKeep).join('/').replace(/&/g, '~and~') +
-          (l.search ? '&q=' + l.search.slice(1).replace(/&/g, '~and~') : '') +
-          l.hash
-        );
-      }
-    </script>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    
+    <title>SystemADF | Asset Management</title>
+    <meta name="description" content="ADF Central Intelligence System - Empowering forward-thinking brands with intelligent strategy and radical visual systems." />
+    <meta name="google-site-verification" content="googlee403290d1db632d6" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://systemadf.site/" />
+    <meta property="og:title" content="SystemADF | Central Intelligence System" />
+    <meta property="og:description" content="Strategic design tracking and asset management for PT AKG DF." />
+    <meta property="og:image" content="./brand/favicon-new 10.32.55.png" />
+
+    <meta property="twitter:card" content="summary_large_image" />
+    <meta property="twitter:url" content="https://systemadf.site/" />
+    <meta property="twitter:title" content="SystemADF | Asset Management" />
+    <meta property="twitter:description" content="Strategic design tracking and asset management for PT AKG DF." />
+    <meta property="twitter:image" content="/brand/favicon-new 10.32.55.png" />
+    
+    <link rel="icon" type="image/png" href="./brand/favicon-new 10.32.55.png" />
+    <script type="module" crossorigin src="./assets/index-lzl7EBXT.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-Bk89VD0j.css">
   </head>
   <body>
-    </body>
+    <div id="root"></div>
+  </body>
 </html>
