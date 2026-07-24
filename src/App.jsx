@@ -58,18 +58,7 @@ function getCurrentPath() {
 }
 
 function isValidRoute(path) {
-  const cleanPath = normalizePath(path);
-
-  if (
-    cleanPath === "/requestpage" ||
-    cleanPath.startsWith("/requestpage/") ||
-    cleanPath === "/catalog" ||
-    cleanPath.startsWith("/catalog/")
-  ) {
-    return true;
-  }
-
-  return Boolean(ROUTES[cleanPath]);
+  return Boolean(ROUTES[normalizePath(path)]);
 }
 
 function readInternalHistory() {
@@ -458,14 +447,7 @@ export default function App() {
   }, [auth?.themeMode]);
 
   const activeRoute = useMemo(() => {
-    const routePath =
-      currentPath === "/requestpage" || currentPath.startsWith("/requestpage/")
-        ? "/requestpage"
-        : currentPath === "/catalog" || currentPath.startsWith("/catalog/")
-          ? "/catalog"
-          : currentPath;
-
-    return ROUTES[routePath] || ROUTES[DEFAULT_ROUTE];
+    return ROUTES[currentPath] || ROUTES[DEFAULT_ROUTE];
   }, [currentPath]);
 
   const PageComponent = activeRoute.component;

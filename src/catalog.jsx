@@ -14,7 +14,6 @@ import {
   Lock,
   Unlock,
   Pencil,
-  Pin,
   UploadCloud,
   Image as ImageIcon,
   Save,
@@ -41,68 +40,6 @@ const BUCKET_NAME = "request-attachments";
 const MAX_COVER_SIZE_MB = 1;
 const MAX_COVER_SIZE_BYTES = MAX_COVER_SIZE_MB * 1024 * 1024;
 const DEFAULT_P4_COVER = "/brand/popup1.png";
-
-const CATALOG_ROUTE_BASE = "/catalog";
-
-function makeCatalogShareSlug(value) {
-  return String(value || "")
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/&/g, "and")
-    .replace(/[^a-z0-9]+/g, "")
-    .trim();
-}
-
-function getCatalogSectionShareSlug(section) {
-  return makeCatalogShareSlug(
-    section?.slug ||
-      section?.title ||
-      section?.name ||
-      section?.label ||
-      section?.id ||
-      ""
-  );
-}
-
-function readCatalogSectionSlugFromPath() {
-  if (typeof window === "undefined") return "";
-
-  const cleanPath = String(window.location.pathname || "")
-    .split("?")[0]
-    .split("#")[0]
-    .replace(/\/+$/, "")
-    .toLowerCase();
-
-  if (!cleanPath.startsWith(`${CATALOG_ROUTE_BASE}/`)) return "";
-
-  return cleanPath
-    .slice(CATALOG_ROUTE_BASE.length + 1)
-    .split("/")
-    .filter(Boolean)[0] || "";
-}
-
-function writeCatalogSectionPath(catalog, sectionId, replace = false) {
-  if (typeof window === "undefined") return;
-
-  let nextPath = CATALOG_ROUTE_BASE;
-
-  if (sectionId && sectionId !== "all") {
-    const section = (catalog?.sections || []).find((item) => item.id === sectionId);
-    const slug = getCatalogSectionShareSlug(section);
-
-    if (slug) nextPath = `${CATALOG_ROUTE_BASE}/${slug}`;
-  }
-
-  const currentPath = String(window.location.pathname || "").replace(/\/+$/, "") || "/";
-
-  if (currentPath === nextPath) return;
-
-  const method = replace ? "replaceState" : "pushState";
-  window.history[method]({ adf: true, path: nextPath }, "", nextPath);
-  window.dispatchEvent(new Event("adf-route-change"));
-}
-
 
 const P4_TEMPLATE_SECTIONS = [
   {
@@ -364,158 +301,6 @@ function moveItem(list, fromIndex, toIndex) {
   return safeList;
 }
 
-
-function sortCatalogAssetList(items = []) {
-  return [...(items || [])].sort((a, b) => {
-    const orderA = Number.isFinite(Number(a.sort_order)) ? Number(a.sort_order) : 999999;
-    const orderB = Number.isFinite(Number(b.sort_order)) ? Number(b.sort_order) : 999999;
-    if (orderA !== orderB) return orderA - orderB;
-
-    const timeA = new Date(a.updated_at || a.created_at || 0).getTime();
-    const timeB = new Date(b.updated_at || b.created_at || 0).getTime();
-    return timeB - timeA;
-  });
-}
-
-function sortCatalogList(items = []) {
-  return [...(items || [])].sort((a, b) => {
-    const pinnedDiff = Number(Boolean(b.is_pinned)) - Number(Boolean(a.is_pinned));
-    if (pinnedDiff !== 0) return pinnedDiff;
-
-    if (a.is_pinned && b.is_pinned) {
-      const pinnedA = new Date(a.pinned_at || a.updated_at || a.created_at || 0).getTime();
-      const pinnedB = new Date(b.pinned_at || b.updated_at || b.created_at || 0).getTime();
-      if (pinnedA !== pinnedB) return pinnedB - pinnedA;
-    }
-
-    const timeA = new Date(a.updated_at || a.created_at || 0).getTime();
-    const timeB = new Date(b.updated_at || b.created_at || 0).getTime();
-    if (timeA !== timeB) return timeB - timeA;
-
-    return Number(a.sort_order || 0) - Number(b.sort_order || 0);
-  });
-}
-
-
-const CATALOG_ROUTE_BASE = "/catalog";
-
-function makeCatalogRouteSlug(value) {
-  return String(value || "")
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/&/g, " and ")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "") || "untitled";
-}
-
-function makeShortRouteId(value) {
-  return String(value || "")
-    .replace(/[^a-zA-Z0-9]/g, "")
-    .slice(0, 8)
-    .toLowerCase() || "item";
-}
-
-function makeUniqueRouteSlug(item, siblings, getLabel) {
-  const base = makeCatalogRouteSlug(getLabel(item));
-  const sameBase = (siblings || []).filter(
-    (candidate) => makeCatalogRouteSlug(getLabel(candidate)) === base
-  );
-
-  if (sameBase.length <= 1) return base;
-  return `${base}--${makeShortRouteId(item?.id)}`;
-}
-
-function getCatalogRouteSlug(catalog, catalogs) {
-  return makeUniqueRouteSlug(
-    catalog,
-    catalogs,
-    (item) => item?.slug || item?.title || item?.id
-  );
-}
-
-function getSectionRouteSlug(section, catalog) {
-  return makeUniqueRouteSlug(
-    section,
-    catalog?.sections || [],
-    (item) => item?.title || item?.id
-  );
-}
-
-function getAssetRouteSlug(asset, section) {
-  return makeUniqueRouteSlug(
-    asset,
-    section?.items || [],
-    (item) => item?.name || item?.id
-  );
-}
-
-function buildCatalogRoutePath(catalog, catalogs) {
-  if (!catalog) return CATALOG_ROUTE_BASE;
-  return `${CATALOG_ROUTE_BASE}/${getCatalogRouteSlug(catalog, catalogs)}`;
-}
-
-function buildSectionRoutePath(catalog, section, catalogs) {
-  if (!catalog || !section) return buildCatalogRoutePath(catalog, catalogs);
-  return `${buildCatalogRoutePath(catalog, catalogs)}/${getSectionRouteSlug(section, catalog)}`;
-}
-
-function buildAssetRoutePath(catalog, section, asset, catalogs) {
-  if (!catalog || !section || !asset) {
-    return buildSectionRoutePath(catalog, section, catalogs);
-  }
-
-  return `${buildSectionRoutePath(catalog, section, catalogs)}/${getAssetRouteSlug(asset, section)}`;
-}
-
-function readCatalogRouteParts() {
-  if (typeof window === "undefined") return [];
-
-  const cleanPath = String(window.location.pathname || "")
-    .split("?")[0]
-    .split("#")[0]
-    .replace(/\/+$/, "")
-    .toLowerCase();
-
-  if (cleanPath === CATALOG_ROUTE_BASE) return [];
-  if (!cleanPath.startsWith(`${CATALOG_ROUTE_BASE}/`)) return [];
-
-  return cleanPath
-    .slice(CATALOG_ROUTE_BASE.length + 1)
-    .split("/")
-    .filter(Boolean)
-    .map((part) => decodeURIComponent(part));
-}
-
-function writeCatalogRoutePath(nextPath, replace = false) {
-  if (typeof window === "undefined" || !nextPath) return;
-
-  const currentPath = String(window.location.pathname || "").replace(/\/+$/, "") || "/";
-  if (currentPath === nextPath) return;
-
-  const method = replace ? "replaceState" : "pushState";
-  window.history[method]({ adf: true, path: nextPath }, "", nextPath);
-  window.dispatchEvent(new Event("adf-route-change"));
-}
-
-function findCatalogByRouteSlug(catalogs, slug) {
-  return (catalogs || []).find(
-    (catalog) => getCatalogRouteSlug(catalog, catalogs) === slug
-  ) || null;
-}
-
-function findSectionByRouteSlug(catalog, slug) {
-  return (catalog?.sections || []).find(
-    (section) => getSectionRouteSlug(section, catalog) === slug
-  ) || null;
-}
-
-function findAssetByRouteSlug(section, slug) {
-  return (section?.items || []).find(
-    (asset) => getAssetRouteSlug(asset, section) === slug
-  ) || null;
-}
-
 function countCatalogAssets(catalog) {
   return (catalog?.sections || []).reduce(
     (total, section) => total + (section.items || []).length,
@@ -678,8 +463,6 @@ export default function Catalog() {
 
   const editModeRef = useRef(false);
   const hasUnsavedChangesRef = useRef(false);
-  const lastResolvedCatalogPathRef = useRef("");
-  const [catalogRouteVersion, setCatalogRouteVersion] = useState(0);
 
   useEffect(() => {
     editModeRef.current = editMode;
@@ -688,20 +471,6 @@ export default function Catalog() {
   useEffect(() => {
     hasUnsavedChangesRef.current = hasUnsavedChanges;
   }, [hasUnsavedChanges]);
-
-  useEffect(() => {
-    const handleCatalogRouteChange = () => {
-      setCatalogRouteVersion((version) => version + 1);
-    };
-
-    window.addEventListener("popstate", handleCatalogRouteChange);
-    window.addEventListener("adf-route-change", handleCatalogRouteChange);
-
-    return () => {
-      window.removeEventListener("popstate", handleCatalogRouteChange);
-      window.removeEventListener("adf-route-change", handleCatalogRouteChange);
-    };
-  }, []);
 
   const shouldSkipRealtimeReload = () => {
     return editModeRef.current && hasUnsavedChangesRef.current;
@@ -719,9 +488,9 @@ export default function Catalog() {
     setPageError("");
 
     const [catalogRes, sectionRes, assetRes, trashRes] = await Promise.all([
-      supabase.from("catalogs").select("*").order("is_pinned", { ascending: false }).order("pinned_at", { ascending: false }).order("updated_at", { ascending: false }).order("created_at", { ascending: false }),
-      supabase.from("catalog_sections").select("*").order("sort_order", { ascending: true }).order("updated_at", { ascending: false }).order("created_at", { ascending: false }),
-      supabase.from("catalog_assets").select("*").order("sort_order", { ascending: true }).order("updated_at", { ascending: false }).order("created_at", { ascending: false }),
+      supabase.from("catalogs").select("*").order("sort_order", { ascending: true }).order("created_at", { ascending: true }),
+      supabase.from("catalog_sections").select("*").order("sort_order", { ascending: true }).order("created_at", { ascending: true }),
+      supabase.from("catalog_assets").select("*").order("sort_order", { ascending: true }).order("created_at", { ascending: true }),
       supabase.from("catalog_trash").select("*").order("created_at", { ascending: false }),
     ]);
 
@@ -764,7 +533,7 @@ export default function Catalog() {
         title: section.title || "Untitled Section",
         subtitle: section.subtitle || "",
         cover: section.cover_path || "",
-        items: sortCatalogAssetList(assetsBySection.get(section.id) || []),
+        items: assetsBySection.get(section.id) || [],
       });
       sectionsByCatalog.set(section.catalog_id, list);
     });
@@ -776,19 +545,15 @@ export default function Catalog() {
       badge: catalog.badge || "CATALOG",
       note: catalog.note || "",
       cover_url: coverMap.get(catalog.id) || "",
-      is_pinned: Boolean(catalog.is_pinned),
-      pinned_at: catalog.pinned_at || null,
       sections: sectionsByCatalog.get(catalog.id) || [],
     }));
 
-    const sortedCatalogs = sortCatalogList(mappedCatalogs);
-
-    setCatalogs(sortedCatalogs);
+    setCatalogs(mappedCatalogs);
     setTrashItems(trashRes.data || []);
 
     if (
       activeCatalogId &&
-      !sortedCatalogs.some((catalog) => catalog.id === activeCatalogId)
+      !mappedCatalogs.some((catalog) => catalog.id === activeCatalogId)
     ) {
       setActiveCatalogId(null);
       setActiveSection("all");
@@ -846,77 +611,6 @@ export default function Catalog() {
   const activeCatalog = useMemo(() => {
     return catalogs.find((catalog) => catalog.id === activeCatalogId) || null;
   }, [catalogs, activeCatalogId]);
-
-
-  useEffect(() => {
-    if (loading) return;
-
-    const currentPath = String(window.location.pathname || "").replace(/\/+$/, "") || "/";
-    if (lastResolvedCatalogPathRef.current === currentPath) return;
-
-    const routeParts = readCatalogRouteParts();
-
-    if (routeParts.length === 0) {
-      lastResolvedCatalogPathRef.current = currentPath;
-      setActiveCatalogId(null);
-      setActiveSection("all");
-      setConfirmAsset(null);
-      return;
-    }
-
-    const routeCatalog = findCatalogByRouteSlug(catalogs, routeParts[0]);
-    if (!routeCatalog) return;
-
-    const routeSection = routeParts[1]
-      ? findSectionByRouteSlug(routeCatalog, routeParts[1])
-      : null;
-
-    const routeAsset = routeParts[2] && routeSection
-      ? findAssetByRouteSlug(routeSection, routeParts[2])
-      : null;
-
-    setActiveCatalogId(routeCatalog.id);
-    setActiveSection(routeSection?.id || "all");
-    setSearch("");
-
-    if (routeAsset && routeSection) {
-      setConfirmAsset({
-        ...routeAsset,
-        sectionId: routeSection.id,
-        sectionTitle: routeSection.title,
-      });
-    } else {
-      setConfirmAsset(null);
-    }
-
-    lastResolvedCatalogPathRef.current = currentPath;
-  }, [catalogs, loading, catalogRouteVersion]);
-
-  const selectCatalogSection = useCallback(
-    (sectionId, options = {}) => {
-      setActiveSection(sectionId);
-
-      if (!activeCatalog) return;
-
-      if (!sectionId || sectionId === "all") {
-        writeCatalogRoutePath(
-          buildCatalogRoutePath(activeCatalog, catalogs),
-          Boolean(options.replace)
-        );
-        return;
-      }
-
-      const section = (activeCatalog.sections || []).find(
-        (item) => item.id === sectionId
-      );
-
-      writeCatalogRoutePath(
-        buildSectionRoutePath(activeCatalog, section, catalogs),
-        Boolean(options.replace)
-      );
-    },
-    [activeCatalog, catalogs]
-  );
 
   const filteredCatalogs = useMemo(() => {
     const keyword = normalizeText(search);
@@ -991,7 +685,6 @@ export default function Catalog() {
       .flatMap((section) =>
         (section.items || []).map((item) => ({
           ...item,
-          sectionId: section.id,
           sectionTitle: section.title,
         }))
       )
@@ -1121,9 +814,7 @@ export default function Catalog() {
             name: asset.name || "Untitled Asset",
             type: asset.type || "Asset",
             url: asset.url || "",
-            sort_order: asset.sort_order ?? assetIndex + 1,
-            is_pinned: Boolean(asset.is_pinned),
-            pinned_at: asset.is_pinned ? (asset.pinned_at || now) : null,
+            sort_order: asset.sort_order || assetIndex + 1,
             updated_at: now,
           })
           .eq("id", asset.id);
@@ -1176,7 +867,7 @@ export default function Catalog() {
 
     setSyncing(true);
 
-    const nextOrder = 0;
+    const nextOrder = catalogs.length + 1;
 
     const { data: catalog, error: catalogError } = await supabase
       .from("catalogs")
@@ -1187,8 +878,6 @@ export default function Catalog() {
         badge: catalogDraft.badge.trim() || "NEW CATALOG",
         note: "Editable catalog.",
         sort_order: nextOrder,
-        is_pinned: false,
-        pinned_at: null,
       })
       .select("*")
       .single();
@@ -1273,7 +962,7 @@ export default function Catalog() {
     setPageError("");
 
     const latestCatalog = catalogs.find((catalog) => catalog.id === activeCatalog.id) || activeCatalog;
-    const nextOrder = 0;
+    const nextOrder = (latestCatalog.sections || []).length + 1;
 
     const { data, error } = await supabase
       .from("catalog_sections")
@@ -1357,7 +1046,7 @@ export default function Catalog() {
 
     const latestCatalog = catalogs.find((catalog) => catalog.id === activeCatalog.id) || activeCatalog;
     const section = (latestCatalog.sections || []).find((item) => item.id === sectionId);
-    const nextOrder = 0;
+    const nextOrder = (section?.items || []).length + 1;
 
     const { error } = await supabase.from("catalog_assets").insert({
       catalog_id: activeCatalog.id,
@@ -1366,8 +1055,6 @@ export default function Catalog() {
       type: "Asset",
       url: "",
       sort_order: nextOrder,
-      is_pinned: false,
-      pinned_at: null,
     });
 
     if (error) {
@@ -1393,7 +1080,7 @@ export default function Catalog() {
                   ? {
                       ...section,
                       items: (section.items || []).map((asset) =>
-                        asset.id === assetId ? { ...asset, ...patch, sort_order: asset.is_pinned ? -9999 : 0, updated_at: new Date().toISOString() } : asset
+                        asset.id === assetId ? { ...asset, ...patch } : asset
                       ),
                     }
                   : section
@@ -1851,47 +1538,6 @@ export default function Catalog() {
     await loadCatalogData(true);
   };
 
-
-  const togglePinCatalog = async (catalogId) => {
-    const target = catalogs.find((catalog) => catalog.id === catalogId);
-    if (!target) return;
-
-    const now = new Date().toISOString();
-    const nextPinned = !Boolean(target.is_pinned);
-
-    setCatalogs((prev) =>
-      sortCatalogList(
-        prev.map((catalog) =>
-          catalog.id === catalogId
-            ? {
-                ...catalog,
-                is_pinned: nextPinned,
-                pinned_at: nextPinned ? now : null,
-                updated_at: now,
-              }
-            : catalog
-        )
-      )
-    );
-
-    const { error } = await supabase
-      .from("catalogs")
-      .update({
-        is_pinned: nextPinned,
-        pinned_at: nextPinned ? now : null,
-        updated_at: now,
-      })
-      .eq("id", catalogId);
-
-    if (error) {
-      setPageError(`Pin catalog gagal: ${error.message}`);
-      await loadCatalogData(true);
-      return;
-    }
-
-    await loadCatalogData(true);
-  };
-
   const handleCoverUpload = async (event) => {
     const file = event.target.files?.[0];
     event.target.value = "";
@@ -1946,16 +1592,9 @@ export default function Catalog() {
 
     if (!saved) return;
 
-    const catalog = catalogs.find((item) => item.id === catalogId);
-
     setActiveCatalogId(catalogId);
     setActiveSection("all");
     setSearch("");
-    setConfirmAsset(null);
-
-    if (catalog) {
-      writeCatalogRoutePath(buildCatalogRoutePath(catalog, catalogs));
-    }
   };
 
   const backToLibrary = async () => {
@@ -1966,8 +1605,6 @@ export default function Catalog() {
     setActiveCatalogId(null);
     setActiveSection("all");
     setSearch("");
-    setConfirmAsset(null);
-    writeCatalogRoutePath(CATALOG_ROUTE_BASE);
   };
 
   const handleBack = async () => {
@@ -1983,58 +1620,15 @@ export default function Catalog() {
     navigateTo(BACK_TO_POPUP_URL);
   };
 
-  const handleOpenAsset = (asset, sectionReference = null) => {
-    if (editMode || !activeCatalog || !asset) return;
-
-    const section =
-      sectionReference && typeof sectionReference === "object"
-        ? (activeCatalog.sections || []).find(
-            (item) => item.id === sectionReference.id
-          ) || sectionReference
-        : (activeCatalog.sections || []).find(
-            (item) =>
-              item.id === asset.sectionId ||
-              item.id === asset.section_id ||
-              item.title === sectionReference ||
-              item.title === asset.sectionTitle
-          );
-
-    setConfirmAsset({
-      ...asset,
-      sectionId: section?.id || asset.sectionId || asset.section_id || null,
-      sectionTitle: section?.title || asset.sectionTitle || "",
-    });
-
-    if (section) {
-      writeCatalogRoutePath(
-        buildAssetRoutePath(activeCatalog, section, asset, catalogs)
-      );
-    }
-  };
-
-  const closeConfirmAsset = () => {
-    if (!activeCatalog) {
-      setConfirmAsset(null);
-      return;
-    }
-
-    const section = (activeCatalog.sections || []).find(
-      (item) => item.id === confirmAsset?.sectionId
-    );
-
-    setConfirmAsset(null);
-    writeCatalogRoutePath(
-      section
-        ? buildSectionRoutePath(activeCatalog, section, catalogs)
-        : buildCatalogRoutePath(activeCatalog, catalogs),
-      true
-    );
+  const handleOpenAsset = (asset, sectionTitle = "") => {
+    if (editMode) return;
+    setConfirmAsset({ ...asset, sectionTitle });
   };
 
   const handleContinueOpen = () => {
     if (!confirmAsset?.url) return;
     window.open(confirmAsset.url, "_blank", "noopener,noreferrer");
-    closeConfirmAsset();
+    setConfirmAsset(null);
   };
 
   return (
@@ -2112,7 +1706,7 @@ export default function Catalog() {
             catalogs={catalogs}
             activeCatalog={activeCatalog}
             activeSection={activeSection}
-            setActiveSection={selectCatalogSection}
+            setActiveSection={setActiveSection}
             onBack={handleBack}
             onOpenLibrary={backToLibrary}
             onOpenCatalog={openCatalog}
@@ -2141,7 +1735,7 @@ export default function Catalog() {
                 search={search}
                 setSearch={setSearch}
                 activeSection={activeSection}
-                setActiveSection={selectCatalogSection}
+                setActiveSection={setActiveSection}
                 filteredCount={filteredSections.reduce((total, section) => total + (section.items || []).length, 0)}
                 editMode={editMode}
                 onBack={handleBack}
@@ -2237,7 +1831,6 @@ export default function Catalog() {
               onAddCatalog={() => setCatalogModalOpen(true)}
               onDeleteCatalog={askDeleteCatalog}
               onMoveCatalog={moveCatalog}
-              onTogglePinCatalog={togglePinCatalog}
               trashCount={trashItems.length}
               onOpenTrash={openTrash}
               onUndoTrash={undoLastTrash}
@@ -2305,7 +1898,7 @@ export default function Catalog() {
       {confirmAsset && (
         <ConfirmOpenModal
           asset={confirmAsset}
-          onClose={closeConfirmAsset}
+          onClose={() => setConfirmAsset(null)}
           onContinue={handleContinueOpen}
         />
       )}
@@ -2546,7 +2139,6 @@ function CatalogLibrary({
   onAddCatalog,
   onDeleteCatalog,
   onMoveCatalog,
-  onTogglePinCatalog,
   trashCount = 0,
   onOpenTrash,
   onUndoTrash,
@@ -2694,7 +2286,6 @@ function CatalogLibrary({
                 onOpen={() => onOpenCatalog(catalog.id)}
                 onDelete={() => onDeleteCatalog(catalog)}
                 onMove={(placement) => onMoveCatalog(catalog.id, placement)}
-                onTogglePin={() => onTogglePinCatalog?.(catalog.id)}
               />
             ))}
           </div>
@@ -2704,21 +2295,13 @@ function CatalogLibrary({
   );
 }
 
-function CatalogCard({ catalog, index, editMode, onOpen, onDelete, onMove, onTogglePin }) {
+function CatalogCard({ catalog, index, editMode, onOpen, onDelete, onMove }) {
   const cover = getCatalogCover(catalog);
 
   return (
-    <article
-      role="button"
-      tabIndex={0}
+    <button
       onClick={onOpen}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          onOpen();
-        }
-      }}
-      className="catalog-fade group relative min-h-[290px] cursor-pointer overflow-hidden rounded-[32px] border border-white/70 bg-white/70 p-5 text-left shadow-[0_18px_55px_rgba(0,0,0,0.06)] backdrop-blur-xl transition duration-500 hover:-translate-y-1 hover:bg-white active:scale-[0.985]"
+      className="catalog-fade group relative min-h-[290px] overflow-hidden rounded-[32px] border border-white/70 bg-white/70 p-5 text-left shadow-[0_18px_55px_rgba(0,0,0,0.06)] backdrop-blur-xl transition duration-500 hover:-translate-y-1 hover:bg-white active:scale-[0.985]"
       style={{ animationDelay: `${index * 70}ms` }}
     >
       {cover ? (
@@ -2740,23 +2323,6 @@ function CatalogCard({ catalog, index, editMode, onOpen, onDelete, onMove, onTog
           </div>
 
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <button
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                onTogglePin?.();
-              }}
-              className={`grid h-9 w-9 place-items-center rounded-full shadow-sm transition ${
-                catalog.is_pinned
-                  ? "bg-neutral-950 text-white"
-                  : "bg-white/90 text-neutral-500 hover:bg-white hover:text-neutral-950"
-              }`}
-              title={catalog.is_pinned ? "Unpin catalog" : "Pin catalog to top"}
-              aria-label={catalog.is_pinned ? "Unpin catalog" : "Pin catalog to top"}
-            >
-              <Pin size={15} fill={catalog.is_pinned ? "currentColor" : "none"} />
-            </button>
-
             <span className="rounded-full bg-white/90 px-3 py-1 text-[11px] font-semibold text-neutral-500 shadow-sm">
               {catalog.badge || "CATALOG"}
             </span>
@@ -2809,16 +2375,9 @@ function CatalogCard({ catalog, index, editMode, onOpen, onDelete, onMove, onTog
           </p>
 
           <div className="mt-5 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="rounded-full bg-neutral-950 px-4 py-2 text-xs font-semibold text-white">
-                {catalog.sections?.length || 0} sections · {countCatalogAssets(catalog)} assets
-              </span>
-              {catalog.is_pinned && (
-                <span className="rounded-full bg-white/95 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-neutral-700 shadow-sm">
-                  Pinned
-                </span>
-              )}
-            </div>
+            <span className="rounded-full bg-neutral-950 px-4 py-2 text-xs font-semibold text-white">
+              {catalog.sections?.length || 0} sections · {countCatalogAssets(catalog)} assets
+            </span>
 
             <span className="grid h-10 w-10 place-items-center rounded-full bg-white text-neutral-500 shadow-sm transition group-hover:translate-x-1 group-hover:text-neutral-950">
               <ArrowRight size={20} strokeWidth={1.8} />
@@ -2826,7 +2385,7 @@ function CatalogCard({ catalog, index, editMode, onOpen, onDelete, onMove, onTog
           </div>
         </div>
       </div>
-    </article>
+    </button>
   );
 }
 
@@ -3218,14 +2777,9 @@ function CatalogAssetCard({
   }
 
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={() => onOpenAsset(asset, section)}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") onOpenAsset(asset, section);
-      }}
-      className="group flex min-h-[138px] cursor-pointer flex-col justify-between rounded-[24px] border border-black/5 bg-white/72 p-4 text-left shadow-sm transition duration-300 hover:-translate-y-0.5 hover:bg-white hover:shadow-[0_18px_45px_rgba(0,0,0,0.08)] active:scale-[0.985]"
+    <button
+      onClick={() => onOpenAsset(asset, section.title)}
+      className="group flex min-h-[138px] flex-col justify-between rounded-[24px] border border-black/5 bg-white/72 p-4 text-left shadow-sm transition duration-300 hover:-translate-y-0.5 hover:bg-white hover:shadow-[0_18px_45px_rgba(0,0,0,0.08)] active:scale-[0.985]"
     >
       <div>
         <div className="mb-4 flex items-start justify-between gap-3">
@@ -3233,11 +2787,9 @@ function CatalogAssetCard({
             <FolderOpen className="h-[19px] w-[19px] shrink-0" strokeWidth={1.8} />
           </div>
 
-          <div className="flex items-center gap-2">
-            <span className="rounded-full bg-neutral-100 px-3 py-1 text-[11px] font-medium text-neutral-500">
-              {asset.type || "Asset"}
-            </span>
-          </div>
+          <span className="rounded-full bg-neutral-100 px-3 py-1 text-[11px] font-medium text-neutral-500">
+            {asset.type || "Asset"}
+          </span>
         </div>
 
         <h4 className="line-clamp-2 text-lg font-semibold leading-tight tracking-[-0.045em]">
@@ -3260,7 +2812,7 @@ function CatalogAssetCard({
           className="text-neutral-400 transition group-hover:translate-x-1 group-hover:text-neutral-950"
         />
       </div>
-    </div>
+    </button>
   );
 }
 
@@ -3328,7 +2880,7 @@ function CatalogQuickAccessPanel({ assets, onOpenAsset }) {
         {assets.map((asset) => (
           <button
             key={`quick-${asset.sectionTitle}-${asset.id}`}
-            onClick={() => onOpenAsset(asset, { id: asset.sectionId, title: asset.sectionTitle, items: [] })}
+            onClick={() => onOpenAsset(asset, asset.sectionTitle)}
             className="group flex w-full items-center justify-between gap-3 rounded-2xl px-3 py-3 text-left transition hover:bg-white"
           >
             <div className="min-w-0">
