@@ -1,3 +1,2 @@
-SystemADF v2.17.7
-Full project — Android, iOS, Windows, MacBook app options
-Source revision 2026-09-08
+SystemADF v2.17.9
+Showcase, recap preview, retention and account access.

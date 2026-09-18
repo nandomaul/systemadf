@@ -1,7 +1,11 @@
 {
   "schemaVersion": 1,
-  "android": null,
-  "ios": null,
-  "windows": null,
-  "mac": null
+  "android": {
+    "version": "2.17.10",
+    "channel": "test",
+    "format": "apk",
+    "url": "/downloads/SystemADF-android-2.17.10-deedf349e083.apk",
+    "bytes": 68212211,
+    "sha256": "deedf349e083927472e57f1b164f6ab20dd906094cd1c1d12aa5308245d3addb"
+  }
 }
