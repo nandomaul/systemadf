@@ -1,13 +1,13 @@
-/* SystemADF 2.17.19 · generated during npm run build. */
-const RELEASE = "2.17.19";
-const BUILD_ID = "2.17.19-mugc3866";
+/* SystemADF 2.17.21 · generated during npm run build. */
+const RELEASE = "2.17.21";
+const BUILD_ID = "2.17.21-mugfbyif";
 const APP_CACHE_PREFIX = "systemadf-app-";
 const APP_CACHE = APP_CACHE_PREFIX + BUILD_ID;
 const IMAGE_CACHE = "systemadf-images-v3";
 const FONT_CACHE = "systemadf-fonts-v3";
 const OFFLINE_URL = "/offline.html";
 const APP_SHELL = "/index.html";
-const PRECACHE = ["/","/404.html","/app-icons/apple-touch-icon.png","/app-icons/icon-192.png","/app-icons/icon-512.png","/assets/html2canvas.esm-BTH0Ap93.js","/assets/index-BIBSI_MJ.js","/assets/index-C8au3Joz.js","/assets/index-CgO_lmIX.js","/assets/index-DJhnQkCg.js","/assets/index-hq4_69xj.css","/assets/index-JLGiWHQ3.js","/assets/index-Ya-xX9GE.js","/assets/index.es-CNdFSBYe.js","/assets/jspdf.es.min-XwIb_Ijh.js","/assets/jsQR-CvWo3SM-.js","/assets/notificationRuntime-Jf_SJolz.js","/assets/purify.es-Dlc2MFTI.js","/assets/vision_bundle-DBtvWB-X.js","/assets/web-Bc-waAQk.js","/assets/web-BoZdUDIz.js","/assets/web-CD2v-iin.js","/assets/web-ljFLwC65.js","/index.html","/manifest.webmanifest","/offline.html","/version.json"];
+const PRECACHE = ["/","/404.html","/app-icons/apple-touch-icon.png","/app-icons/icon-192.png","/app-icons/icon-512.png","/assets/html2canvas.esm-BTH0Ap93.js","/assets/index-BMP0ny-e.js","/assets/index-C8au3Joz.js","/assets/index-CX9u9uoR.js","/assets/index-DZ2dXiUr.js","/assets/index-qszTNV0W.css","/assets/index-TZ4za0QI.js","/assets/index-VQI66-kT.js","/assets/index.es-BUNdBWdY.js","/assets/jspdf.es.min-BMbsxosI.js","/assets/jsQR-a2uX8v0E.js","/assets/notificationRuntime-DeqMhI0r.js","/assets/purify.es-Dlc2MFTI.js","/assets/vision_bundle-DBtvWB-X.js","/assets/web-B0Mx_1fE.js","/assets/web-Bim3N1jg.js","/assets/web-BTXgr-67.js","/assets/web-h2R9Rm_U.js","/index.html","/manifest.webmanifest","/offline.html","/version.json"];
 const PRECACHE_PATHS = new Set(PRECACHE.map((entry) => new URL(entry, self.location.origin).pathname));
 const MAX_IMAGE_ENTRIES = 180;
 const MAX_FONT_ENTRIES = 32;
