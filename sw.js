@@ -1,29 +1,45 @@
 /* SystemADF 2.17.21 · generated during npm run build. */
 const RELEASE = "2.17.21";
-const BUILD_ID = "2.17.21-muup5ae4";
+const BUILD_ID = "2.17.21-muwfg8ok";
 const APP_CACHE_PREFIX = "systemadf-app-";
 const APP_CACHE = APP_CACHE_PREFIX + BUILD_ID;
-const IMAGE_CACHE = "systemadf-images-v3";
+const IMAGE_CACHE = "systemadf-images-v4";
 const FONT_CACHE = "systemadf-fonts-v3";
 const OFFLINE_URL = "/offline.html";
 const APP_SHELL = "/index.html";
-const PRECACHE = ["/","/404.html","/app-icons/apple-touch-icon.png","/app-icons/icon-192.png","/app-icons/icon-512.png","/assets/html2canvas.esm-BTH0Ap93.js","/assets/index-BMP0ny-e.js","/assets/index-C8au3Joz.js","/assets/index-CX9u9uoR.js","/assets/index-DZ2dXiUr.js","/assets/index-qszTNV0W.css","/assets/index-TZ4za0QI.js","/assets/index-VQI66-kT.js","/assets/index.es-BUNdBWdY.js","/assets/jspdf.es.min-BMbsxosI.js","/assets/jsQR-a2uX8v0E.js","/assets/notificationRuntime-DeqMhI0r.js","/assets/purify.es-Dlc2MFTI.js","/assets/vision_bundle-DBtvWB-X.js","/assets/web-B0Mx_1fE.js","/assets/web-Bim3N1jg.js","/assets/web-BTXgr-67.js","/assets/web-h2R9Rm_U.js","/index.html","/manifest.webmanifest","/offline.html","/version.json"];
+const PRECACHE = ["/","/404.html","/app-icons/apple-touch-icon.png","/app-icons/icon-192.png","/app-icons/icon-512.png","/assets/html2canvas.esm-BTH0Ap93.js","/assets/index-C8au3Joz.js","/assets/index-CevSbIIY.css","/assets/index-CRUIfKSc.js","/assets/index-D-3j0pJY.js","/assets/index-Dl5IGMoL.js","/assets/index-DTX-icSj.js","/assets/index-DxIUANCZ.js","/assets/index.es-BWRYrcCV.js","/assets/jspdf.es.min-DCQoc_Zy.js","/assets/jsQR-Ksaar86T.js","/assets/notificationRuntime-DMtAVr3x.js","/assets/purify.es-Dlc2MFTI.js","/assets/vision_bundle-DBtvWB-X.js","/assets/web-1MkzIlR6.js","/assets/web-CUmCSb2x.js","/assets/web-DvokLzuS.js","/assets/web-uK1-OXTP.js","/index.html","/manifest.webmanifest","/offline.html","/version.json"];
 const PRECACHE_PATHS = new Set(PRECACHE.map((entry) => new URL(entry, self.location.origin).pathname));
 const MAX_IMAGE_ENTRIES = 180;
 const MAX_FONT_ENTRIES = 32;
 const MAX_CACHEABLE_BYTES = 12 * 1024 * 1024;
 
-function cacheableResponse(response) {
+function cacheableResponse(response, request) {
+  if (request && isSupabaseStorage(request) && !response?.ok) return false;
   if (!response) return false;
   if (!(response.ok || response.type === "opaque")) return false;
   const length = Number(response.headers.get("content-length") || 0);
   return !length || length <= MAX_CACHEABLE_BYTES;
 }
 
+function isSupabaseStorage(request) {
+  const url = new URL(request.url);
+  return url.hostname.endsWith(".supabase.co") && url.pathname.startsWith("/storage/v1/");
+}
+
+function fetchRuntime(request) {
+  if (!isSupabaseStorage(request)) return fetch(request);
+  return fetch(new Request(request, { mode: "cors", credentials: "omit" }));
+}
+
+function bypassImageCache(request) {
+  return new URL(request.url).searchParams.has("adf_image_retry");
+}
+
 function runtimeCacheKey(request) {
   const url = new URL(request.url);
   if (url.hostname.endsWith(".supabase.co") && url.pathname.includes("/storage/v1/object/sign/")) {
     url.searchParams.delete("token");
+    url.searchParams.delete("adf_image_retry");
     return url.toString();
   }
   return request;
@@ -39,10 +55,10 @@ async function trimCache(cacheName, maximum) {
 async function cacheFirst(request, cacheName, maximum) {
   const cache = await caches.open(cacheName);
   const key = runtimeCacheKey(request);
-  const cached = await cache.match(key, { ignoreVary: true });
+  const cached = bypassImageCache(request) ? undefined : await cache.match(key, { ignoreVary: true });
   if (cached) return cached;
-  const response = await fetch(request);
-  if (cacheableResponse(response)) {
+  const response = await fetchRuntime(request);
+  if (cacheableResponse(response, request)) {
     await cache.put(key, response.clone()).catch(() => undefined);
     if (maximum) await trimCache(cacheName, maximum).catch(() => undefined);
   }
@@ -52,9 +68,9 @@ async function cacheFirst(request, cacheName, maximum) {
 async function staleWhileRevalidate(event, request, cacheName, maximum) {
   const cache = await caches.open(cacheName);
   const key = runtimeCacheKey(request);
-  const cached = await cache.match(key, { ignoreVary: true });
-  const refresh = fetch(request).then(async (response) => {
-    if (cacheableResponse(response)) {
+  const cached = bypassImageCache(request) ? undefined : await cache.match(key, { ignoreVary: true });
+  const refresh = fetchRuntime(request).then(async (response) => {
+    if (cacheableResponse(response, request)) {
       await cache.put(key, response.clone()).catch(() => undefined);
       if (maximum) await trimCache(cacheName, maximum).catch(() => undefined);
     }
@@ -78,7 +94,7 @@ async function navigation(request) {
   const shell = await cache.match(APP_SHELL);
   if (shell) return shell;
   try {
-    return await fetch(request);
+    return await fetchRuntime(request);
   } catch {
     return (await cache.match(OFFLINE_URL)) || Response.error();
   }
@@ -99,8 +115,8 @@ async function warmImages(urls) {
         mode: url.origin === self.location.origin ? "same-origin" : "no-cors",
         credentials: url.origin === self.location.origin ? "same-origin" : "omit",
       });
-      const response = await fetch(request);
-      if (cacheableResponse(response)) await cache.put(runtimeCacheKey(request), response);
+      const response = await fetchRuntime(request);
+      if (cacheableResponse(response, request)) await cache.put(runtimeCacheKey(request), response);
     } catch {
       // Continue warming the other visible images.
     }
@@ -120,7 +136,8 @@ self.addEventListener("activate", (event) => {
     await Promise.all(names.map((name) => {
       const obsoleteApp = name.startsWith(APP_CACHE_PREFIX) && name !== APP_CACHE && name !== keepPrevious;
       const obsoleteOffline = name.startsWith("systemadf-offline-");
-      return obsoleteApp || obsoleteOffline ? caches.delete(name) : Promise.resolve(false);
+      const obsoleteImages = name.startsWith("systemadf-images-") && name !== IMAGE_CACHE;
+      return obsoleteApp || obsoleteOffline || obsoleteImages ? caches.delete(name) : Promise.resolve(false);
     }));
     await self.clients.claim();
     await broadcast({ type: "SYSTEMADF_CACHE_READY", version: RELEASE, buildId: BUILD_ID });
