@@ -1,13 +1,13 @@
 /* SystemADF 2.17.21 · generated during npm run build. */
 const RELEASE = "2.17.21";
-const BUILD_ID = "2.17.21-mvkfgihe";
+const BUILD_ID = "2.17.21-mvklj8dj";
 const APP_CACHE_PREFIX = "systemadf-app-";
 const APP_CACHE = APP_CACHE_PREFIX + BUILD_ID;
 const IMAGE_CACHE = "systemadf-images-v4";
 const FONT_CACHE = "systemadf-fonts-v3";
 const OFFLINE_URL = "/offline.html";
 const APP_SHELL = "/index.html";
-const PRECACHE = ["/","/404.html","/app-icons/apple-touch-icon.png","/app-icons/icon-192.png","/app-icons/icon-512.png","/assets/html2canvas.esm-BTH0Ap93.js","/assets/index-BYL7uByJ.js","/assets/index-C8au3Joz.js","/assets/index-CjVBNtrv.js","/assets/index-DRVvai76.js","/assets/index-DVSjZ_e7.js","/assets/index-wp_AWpNQ.css","/assets/index-YmXEZYQn.js","/assets/index.es-giBBap6Z.js","/assets/jspdf.es.min-DvyiShq0.js","/assets/jsQR-DS72UCDp.js","/assets/notificationRuntime-BPNhfO9a.js","/assets/purify.es-Dlc2MFTI.js","/assets/vision_bundle-DBtvWB-X.js","/assets/web-BPVTVK3R.js","/assets/web-BYKEBd0b.js","/assets/web-CTF17sgn.js","/assets/web-DHfohp36.js","/index.html","/manifest.webmanifest","/offline.html","/version.json"];
+const PRECACHE = ["/","/404.html","/app-icons/apple-touch-icon.png","/app-icons/icon-192.png","/app-icons/icon-512.png","/assets/html2canvas.esm-BTH0Ap93.js","/assets/index-Bi6-dLr8.js","/assets/index-BiLqWeCw.js","/assets/index-C_0lZn8T.js","/assets/index-C8au3Joz.js","/assets/index-DbCLuGu2.css","/assets/index-DGWiWDnh.js","/assets/index-NYrJrmsV.js","/assets/index.es-DeuBCCzr.js","/assets/jspdf.es.min-BWbsWGoO.js","/assets/jsQR-aYI_0B1J.js","/assets/notificationRuntime-CtOhdS3I.js","/assets/purify.es-Dlc2MFTI.js","/assets/vision_bundle-DBtvWB-X.js","/assets/web-6jrZGJQ1.js","/assets/web-CaDyEBe3.js","/assets/web-oBalHR3B.js","/assets/web-pVh56yde.js","/index.html","/manifest.webmanifest","/offline.html","/version.json"];
 const PRECACHE_PATHS = new Set(PRECACHE.map((entry) => new URL(entry, self.location.origin).pathname));
 const MAX_IMAGE_ENTRIES = 180;
 const MAX_FONT_ENTRIES = 32;
